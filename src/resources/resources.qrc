@@ -1,0 +1,6 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <file alias="app_style.qss">aero_style.qss</file>
+    <!-- We can add icons here later, e.g., <file alias="app_icon.ico">icons/app_icon.ico</file> -->
+</qresource>
+</RCC>

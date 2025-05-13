@@ -1,0 +1,158 @@
+/* Haigaku Manager - Aero Style Sheet (Initial Pass) */
+
+QMainWindow {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #E8E8F2, stop: 1 #D0D0E0);
+    /* A light bluish-gray gradient */
+}
+
+QMenuBar {
+    background-color: transparent; /* Can be part of QMainWindow or styled separately */
+    border-bottom: 1px solid #B0B0C0;
+}
+
+QMenuBar::item {
+    spacing: 3px; /* spacing between menu bar items */
+    padding: 2px 10px;
+    background: transparent;
+    border-radius: 4px;
+}
+
+QMenuBar::item:selected { /* when selected using mouse or keyboard */
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                stop:0 #C8DAF2, stop:1 #B8C8E0);
+}
+
+QMenuBar::item:pressed {
+    background: #A8B8D0;
+}
+
+QMenu {
+    background-color: #F0F0F8; /* Light background for menu dropdowns */
+    border: 1px solid #A0A0B0;
+    padding: 5px;
+}
+
+QMenu::item {
+    padding: 4px 20px 4px 20px;
+    border: 1px solid transparent; /* reserve space for selection border */
+}
+
+QMenu::item:selected {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                      stop:0 #C8DAF2, stop:1 #B8C8E0);
+    color: #000000;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #C0C0D0;
+    margin-left: 10px;
+    margin-right: 5px;
+}
+
+/* General Widgets */
+QLabel, QCheckBox, QRadioButton {
+    color: #101020; /* Darker text for readability */
+}
+
+QTextEdit {
+    background-color: #FFFFFF;
+    border: 1px solid #A0A0B0;
+    border-radius: 4px;
+    padding: 4px;
+    selection-background-color: #A8CCEE; /* Light blue selection */
+    selection-color: #000000;
+    font-family: "Segoe UI", Arial, sans-serif; /* Example font */
+}
+
+QListWidget {
+    background-color: #F8F8FF; /* Very light lavender/blue tint */
+    border: 1px solid #A0A0B0;
+    border-radius: 4px;
+    padding: 2px;
+    alternate-background-color: #EFF2F8;
+}
+
+QListWidget::item {
+    padding: 3px;
+}
+
+QListWidget::item:selected {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                      stop:0 #C8DAF2, stop:1 #B8C8E0);
+    color: #000000;
+    border: 1px solid #8090A8;
+}
+
+QScrollArea {
+    border: 1px solid #A0A0B0;
+    border-radius: 4px;
+    background-color: #E0E0E8; /* Background for the scroll area itself */
+}
+
+/* Style for the imageDisplayLabel inside the QScrollArea */
+QScrollArea > QWidget > QLabel#imageDisplayLabel { /* Assuming imageDisplayLabel has objectName set */
+    background-color: #303038; /* Darker background for image contrast */
+    /* No border here, let scroll area handle it */
+}
+
+
+QSplitter::handle {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                      stop:0 #E0E0E8, stop:0.5 #C8C8D8, stop:1 #E0E0E8);
+    border: 1px solid #B0B0C0;
+    height: 5px; /* For vertical splitter */
+    width: 5px;  /* For horizontal splitter */
+}
+
+QSplitter::handle:horizontal {
+    width: 5px;
+    margin: 0 2px; /* Spacing around handle */
+}
+
+QSplitter::handle:vertical {
+    height: 5px;
+    margin: 2px 0; /* Spacing around handle */
+}
+
+QSplitter::handle:hover {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                      stop:0 #D0D8E8, stop:0.5 #B8C0D0, stop:1 #D0D8E8);
+}
+
+QStatusBar {
+    background-color: #D0D0E0;
+    border-top: 1px solid #B0B0C0;
+    color: #101020;
+}
+
+QStatusBar::item {
+    border: none; /* Remove borders from items in status bar */
+}
+
+/* Placeholder for Buttons if we add them later */
+QPushButton {
+    border: 1px solid #8f8f91;
+    border-radius: 4px;
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #f6f7fa, stop: 1 #dadbde);
+    padding: 5px 10px;
+    min-width: 60px;
+    color: #101020;
+}
+
+QPushButton:hover {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #e6e7ea, stop: 1 #c0c1c3);
+}
+
+QPushButton:pressed {
+    background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
+                                      stop: 0 #dadbde, stop: 1 #f6f7fa);
+}
+
+QPushButton:disabled {
+    background-color: #D0D0D0;
+    color: #808080;
+}
