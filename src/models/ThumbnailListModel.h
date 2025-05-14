@@ -26,10 +26,11 @@ public:
 
     void setThumbnailLoader(ThumbnailLoader *loader); 
     void setThumbnailSize(const QSize &size);
-    bool isThumbnailLoaded(int row) const; // New method
+    bool isThumbnailLoaded(int row) const; 
+    void clearCache(); // New method to clear cached thumbnails
 
 public slots:
-    void onThumbnailReady(int row, const QIcon &thumbnail); // Slot to receive loaded thumbnails
+    void onThumbnailReady(int row, const QIcon &thumbnail); 
 
 private:
     QStringList m_filePaths;

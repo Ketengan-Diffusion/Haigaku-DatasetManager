@@ -1,0 +1,39 @@
+# CMake / Build output
+build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cbp
+*.xcodeproj/
+*.sln
+*.suo
+*.vcxproj*
+*.vcproj*
+*.ilk
+*.pdb
+*.exe
+*.dll
+*.so
+*.dylib
+*.lib
+*.a
+*.o
+*.obj
+
+# Qt specific
+*.user
+*_automoc.cpp
+*_autogen/
+
+# OS specific
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE specific (add more as needed)
+.vscode/
+.idea/
+
+# Installer output
+installer_output/

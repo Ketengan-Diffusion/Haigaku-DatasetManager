@@ -1,8 +1,9 @@
 #include "ThumbnailLoader.h"
-#include "ThumbnailWorker.h" // Already included via .h but good practice
+#include "ThumbnailWorker.h" 
 #include <QDebug>
 #include <QMutexLocker>
-#include <QCoreApplication> // For processEvents
+#include <QCoreApplication> 
+#include <QPainter> // Added for QPainter operations
 
 ThumbnailLoader::ThumbnailLoader(QObject *parent) 
     : QObject(parent), m_maxWorkers(QThread::idealThreadCount() / 2)
@@ -23,11 +24,12 @@ ThumbnailLoader::~ThumbnailLoader()
 void ThumbnailLoader::startWorkers() {
     for (int i = 0; i < m_maxWorkers; ++i) {
         QThread* thread = new QThread(this); // Parented to ThumbnailLoader for lifecycle
-        ThumbnailWorker* worker = new ThumbnailWorker(); // No parent, will be moved to thread
+        ThumbnailWorker* worker = new ThumbnailWorker(); 
         worker->moveToThread(thread);
 
-        connect(thread, &QThread::finished, worker, &QObject::deleteLater); // Clean up worker when thread finishes
-        connect(worker, &ThumbnailWorker::thumbnailReady, this, &ThumbnailLoader::thumbnailReady); // Forward signal
+        connect(thread, &QThread::finished, worker, &QObject::deleteLater); 
+        // connect(worker, &ThumbnailWorker::thumbnailReady, this, &ThumbnailLoader::thumbnailReady); // Old signal
+        connect(worker, &ThumbnailWorker::imageReady, this, &ThumbnailLoader::handleImageReady, Qt::QueuedConnection); // New signal/slot
         connect(worker, &ThumbnailWorker::finished, this, &ThumbnailLoader::onWorkerFinished, Qt::QueuedConnection);
         
         m_workerThreads.append(thread);
@@ -151,4 +153,32 @@ void ThumbnailLoader::clearQueue()
     qDebug() << "ThumbnailLoader queue and pending requests cleared.";
     // Note: This doesn't stop tasks already running in worker threads.
     // True cancellation is more complex.
+}
+
+void ThumbnailLoader::handleImageReady(int row, const QImage &scaledImage, const QString &filePath, const QSize &originalTargetSize)
+{
+    if (scaledImage.isNull()) {
+        qWarning() << "ThumbnailLoader: Received null scaled image for row" << row << filePath;
+        QImage errorPlaceholder(originalTargetSize, QImage::Format_RGB32);
+        errorPlaceholder.fill(Qt::red);
+        emit thumbnailReady(row, QIcon(QPixmap::fromImage(errorPlaceholder)));
+        return;
+    }
+
+    // Create the final canvas using the originalTargetSize
+    QImage finalImage(originalTargetSize, QImage::Format_ARGB32_Premultiplied);
+    finalImage.fill(Qt::transparent); 
+
+    QPainter painter(&finalImage);
+    // No need for CompositionMode_Source if we fill transparent first and draw opaque/semi-transparent on top.
+    // painter.setCompositionMode(QPainter::CompositionMode_Source); 
+    
+    // Calculate x, y to center the scaledImage onto the finalImage canvas
+    int x = (originalTargetSize.width() - scaledImage.width()) / 2;
+    int y = (originalTargetSize.height() - scaledImage.height()) / 2;
+    
+    painter.drawImage(x, y, scaledImage);
+    painter.end(); // Finish painting on QImage
+            
+    emit thumbnailReady(row, QIcon(QPixmap::fromImage(finalImage)));
 }

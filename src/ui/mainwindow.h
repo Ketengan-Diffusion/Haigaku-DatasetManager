@@ -6,9 +6,10 @@
 #include <QFutureWatcher>
 #include <QMap> 
 #include <QTimer> 
-#include "ThumbnailListModel.h" // Added
-#include "ThumbnailLoader.h"  // Added
-
+#include "models/ThumbnailListModel.h" 
+#include "services/ThumbnailLoader.h"  
+#include "ui/AutoCaptionSettingsPanel.h" 
+#include "services/AutoCaptionManager.h"
 
 // Forward declarations
 QT_BEGIN_NAMESPACE
@@ -16,18 +17,19 @@ class QAction;
 class QMenu;
 class QLabel;
 class QTextEdit;
-// class QListWidget; // Replaced by QListView
-class QListView;      // Added
+class QListView;      
 class QSplitter;
 class QScrollArea;
 class QVideoWidget; 
 class QMediaPlayer; 
 class QAudioOutput; 
 class QPushButton;  
+class QToolButton; 
 class QSlider;      
 class QStackedWidget; 
-class QRadioButton;   // Added
-class QGroupBox;      // Added
+class QToolBar; 
+class QPropertyAnimation; 
+class QGraphicsOpacityEffect; 
 QT_END_NAMESPACE
 
 class MainWindow : public QMainWindow
@@ -44,14 +46,25 @@ private slots:
     void displayMediaAtIndex(int index); 
     void nextMedia();                    
     void previousMedia();                
-    // void updateThumbnailInList(int row, const QIcon &icon); // Removed, model handles this
     void performAutoSave(); 
     void showStatisticsDialog(); 
     void onThumbnailViewClicked(const QModelIndex &index); 
     void onThumbnailViewScrolled();     
     void loadVisibleThumbnails();       
-    void onCaptionModeChanged(); 
-    void deleteCurrentMediaItem(); // Slot for deleting current media
+    void deleteCurrentMediaItem(); 
+    void toggleAutoCaptionPanel(); 
+    
+    void onBulbButtonClicked();
+    void updateCaptionWithSuggestion(const QStringList &tags, const QString &forImagePath, bool autoFill); 
+    void handleAutoCaptionError(const QString &errorMessage);
+    void showAutoCaptionSettingsDialog(); 
+
+    void fabAutoHideTimeout(); 
+    void onRefreshThumbnails(); 
+    void fabAnimationFinished(); 
+    void openProject();          
+    void saveProject();          // New
+    void saveProjectAs();        
 
 private:
     void setupUI();
@@ -60,28 +73,44 @@ private:
     void loadFiles(const QString &dirPath);
     void updateFileDetails(const QString &filePath);
     void loadCaptionForCurrentImage();
-    void saveCurrentCaption(); // New slot for saving
-    void applyScoreToCaption(int score); // New slot for scoring
+    void saveCurrentCaption(); 
+    void applyScoreToCaption(int score); 
 
 
     // UI Elements
     QLabel *imageDisplayLabel;       
     QVideoWidget *videoDisplayWidget; 
-    QStackedWidget *mediaDisplayContainer;  // Changed type to QStackedWidget*
+    QStackedWidget *mediaDisplayContainer;  
     QScrollArea *imageScrollArea;    
     
-    QTextEdit *captionEditor;
-    QListView *thumbnailListView; // Changed from QListWidget
+    QTextEdit *captionEditor; 
+    QListView *thumbnailListView; 
     QLabel *fileDetailsLabel;
+    QToolButton *m_bulbButton; 
 
     // Thumbnail Handling
     ThumbnailListModel *m_thumbnailModel;
     ThumbnailLoader *m_thumbnailLoaderService;
 
-    // Caption Mode UI
-    QGroupBox *captionModeGroupBox;
-    QRadioButton *nlpModeRadioButton;
-    QRadioButton *tagsModeRadioButton;
+    // Auto Captioning UI & Logic
+    QToolButton *m_sparkleActionButton;          
+    AutoCaptionSettingsPanel *m_autoCaptionSettingsPanel; 
+    QPropertyAnimation *m_settingsPanelAnimation;  
+    bool m_isAutoCaptionPanelVisible;
+    
+    // Floating Action Button (FAB) related
+    QTimer *m_fabAutoHideTimer;                 
+    QGraphicsOpacityEffect *m_fabOpacityEffect; 
+    QPropertyAnimation *m_fabFadeAnimation;     
+    bool m_isFabDragging;                       
+    QPoint m_fabDragStartPosition;              
+
+    AutoCaptionManager *m_autoCaptionManager;
+    QString m_suggestedCaption; 
+
+    QGroupBox *m_captionModeSwitchGroup;      
+    QRadioButton *m_nlpModeRadioMain;         
+    QRadioButton *m_tagsModeRadioMain;        
 
     // Video Controls
     QWidget *videoControlsWidget; 
@@ -100,23 +129,31 @@ private:
 
     // Data
     QString currentDirectory;
+    QString m_currentProjectPath; 
     QStringList mediaFiles; 
     int currentMediaIndex;
     bool captionChangedSinceLoad; 
     QSize thumbnailDefaultSize; 
     QMap<QString, QString> unsavedCaptions; 
     QTimer *autoSaveTimer;
-    QTimer *m_scrollStopTimer; // Timer to detect when scrolling has stopped
+    QTimer *m_scrollStopTimer; 
 
     // Menu actions
     QAction *openDirAction;
+    QAction *openProjectAction;      
+    QAction *saveProjectAction;      // New
+    QAction *saveProjectAsAction;    
     QAction *exitAction;
     QAction *aboutAction;
     QAction *aboutQtAction; 
-    QAction *statisticsAction; // New action for statistics menu
+    QAction *statisticsAction; 
+    QAction *refreshThumbnailsAction; 
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override; 
+    bool eventFilter(QObject *watched, QEvent *event) override; 
+    void mouseMoveEvent(QMouseEvent *event) override; 
 };
 
 #endif // MAINWINDOW_H

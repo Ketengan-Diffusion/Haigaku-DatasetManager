@@ -1,7 +1,10 @@
-#include "mainwindow.h"
+#include "MainWindow.h" 
 #include "StatisticsDialog.h" 
-#include "ThumbnailListModel.h" 
-#include "ThumbnailLoader.h"  
+#include "AutoCaptionSettingsPanel.h" 
+#include "AutoCaptionSettingsDialog.h" 
+#include "models/ThumbnailListModel.h" 
+#include "services/ThumbnailLoader.h"  
+#include "services/AutoCaptionManager.h" 
 
 #include <QApplication>
 #include <QMenuBar>
@@ -24,15 +27,20 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QKeyEvent>
+#include <QMouseEvent> 
 #include <QPainter> 
 #include <QDebug>
 #include <QIcon> 
 #include <QTimer> 
 #include <QStandardPaths> 
 #include <QDataStream> 
-#include <QRadioButton>   
-#include <QGroupBox>      
-#include <QButtonGroup>   
+#include <QToolButton>    
+#include <QToolBar>       
+#include <QPropertyAnimation> 
+#include <QButtonGroup> 
+#include <QGraphicsOpacityEffect> 
+#include <QToolTip> 
+#include <QSettings> 
 
 #include <QtConcurrent/QtConcurrent> 
 #include <QFuture>
@@ -54,16 +62,27 @@ MainWindow::MainWindow(QWidget *parent)
     , thumbnailListView(nullptr) 
     , m_thumbnailModel(nullptr)  
     , m_thumbnailLoaderService(nullptr) 
-    , captionModeGroupBox(nullptr)   
-    , nlpModeRadioButton(nullptr)    
-    , tagsModeRadioButton(nullptr)   
+    , m_bulbButton(nullptr)            
+    , m_sparkleActionButton(nullptr)       
+    , m_autoCaptionSettingsPanel(nullptr)   
+    , m_settingsPanelAnimation(nullptr)     
+    , m_isAutoCaptionPanelVisible(false)    
+    , m_autoCaptionManager(nullptr)     
+    , m_fabAutoHideTimer(nullptr)
+    , m_fabOpacityEffect(nullptr)
+    , m_fabFadeAnimation(nullptr)
+    , m_isFabDragging(false)                
+    , m_fabDragStartPosition()              
+    , m_captionModeSwitchGroup(nullptr) 
+    , m_nlpModeRadioMain(nullptr)       
+    , m_tagsModeRadioMain(nullptr)      
     , fileDetailsLabel(nullptr)
     , videoControlsWidget(nullptr)
     , playPauseButton(nullptr)
     , seekerSlider(nullptr)
     , durationLabel(nullptr)
     , mainSplitter(nullptr)
-    , rightPanelSplitter(nullptr)
+    , rightPanelSplitter(nullptr) 
     , mediaPlayer(nullptr)
     , audioOutput(nullptr)
     , currentMediaIndex(-1)
@@ -71,8 +90,19 @@ MainWindow::MainWindow(QWidget *parent)
     , thumbnailDefaultSize(180, 100)
     , autoSaveTimer(nullptr)
     , m_scrollStopTimer(nullptr) 
+    , openDirAction(nullptr) 
+    , openProjectAction(nullptr)
+    , saveProjectAction(nullptr)
+    , saveProjectAsAction(nullptr)
+    , exitAction(nullptr)
+    , aboutAction(nullptr)
+    , aboutQtAction(nullptr)
+    , statisticsAction(nullptr)
+    , refreshThumbnailsAction(nullptr)
+    , m_currentProjectPath("") 
 {
     resize(1200, 800);
+    setMouseTracking(true); 
 
     mediaPlayer = new QMediaPlayer(this);
     audioOutput = new QAudioOutput(this);
@@ -83,14 +113,56 @@ MainWindow::MainWindow(QWidget *parent)
     m_thumbnailModel->setThumbnailLoader(m_thumbnailLoaderService);
     m_thumbnailModel->setThumbnailSize(thumbnailDefaultSize);
 
+    m_autoCaptionManager = new AutoCaptionManager(this); 
+
     m_scrollStopTimer = new QTimer(this);
     m_scrollStopTimer->setSingleShot(true);
     m_scrollStopTimer->setInterval(500); 
     connect(m_scrollStopTimer, &QTimer::timeout, this, &MainWindow::loadVisibleThumbnails);
+    
+    m_fabAutoHideTimer = new QTimer(this);
+    m_fabAutoHideTimer->setSingleShot(true);
+    m_fabAutoHideTimer->setInterval(3000); 
+    connect(m_fabAutoHideTimer, &QTimer::timeout, this, &MainWindow::fabAutoHideTimeout);
+
+    m_fabOpacityEffect = new QGraphicsOpacityEffect(this);
+    m_fabFadeAnimation = new QPropertyAnimation(m_fabOpacityEffect, "opacity", this);
+    m_fabFadeAnimation->setDuration(300); 
+    connect(m_fabFadeAnimation, &QPropertyAnimation::finished, this, &MainWindow::fabAnimationFinished);
+
 
     setupUI(); 
     createMenus();
     createStatusBar();
+
+    connect(m_autoCaptionManager, &AutoCaptionManager::captionGenerated, this, &MainWindow::updateCaptionWithSuggestion);
+    connect(m_autoCaptionManager, &AutoCaptionManager::errorOccurred, this, &MainWindow::handleAutoCaptionError);
+    
+    if (m_autoCaptionSettingsPanel) { 
+        connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::loadModelClicked, m_autoCaptionManager, &AutoCaptionManager::loadModel);
+        connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::unloadModelClicked, m_autoCaptionManager, &AutoCaptionManager::unloadModel);
+        connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::deviceSelectionChanged, m_autoCaptionManager, &AutoCaptionManager::setSelectedDevice);
+        connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::useAmdGpuChanged, m_autoCaptionManager, &AutoCaptionManager::setUseAmdGpu);
+        connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::advancedSettingsClicked, this, &MainWindow::showAutoCaptionSettingsDialog);
+        connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::enableSuggestionWhileTypingChanged, m_autoCaptionManager, &AutoCaptionManager::setEnableSuggestionWhileTyping);
+        connect(m_autoCaptionManager, &AutoCaptionManager::modelStatusChanged, 
+                m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::setModelStatus);
+    }
+    
+    if (m_nlpModeRadioMain) {
+        connect(m_nlpModeRadioMain, &QRadioButton::toggled, this, [this](bool checked){
+            if (checked && m_autoCaptionManager) {
+                qDebug() << "MainWindow: NLP Mode selected";
+            }
+        });
+    }
+    if (m_tagsModeRadioMain) {
+         connect(m_tagsModeRadioMain, &QRadioButton::toggled, this, [this](bool checked){
+            if (checked && m_autoCaptionManager) {
+                qDebug() << "MainWindow: Tags Mode selected";
+            }
+        });
+    }
 
     connect(mediaPlayer, &QMediaPlayer::durationChanged, this, [this](qint64 duration){
         if(seekerSlider) seekerSlider->setRange(0, duration / 1000); 
@@ -118,22 +190,26 @@ MainWindow::MainWindow(QWidget *parent)
     
     autoSaveTimer = new QTimer(this);
     connect(autoSaveTimer, &QTimer::timeout, this, &MainWindow::performAutoSave);
-    autoSaveTimer->start(30 * 60 * 1000); 
+    autoSaveTimer->start(30 * 60 * 1000); // Reverted to 30 minutes
 
     statusBar()->showMessage(tr("Ready. Please open a directory."));
+    if (m_sparkleActionButton) {
+        m_sparkleActionButton->setGraphicsEffect(m_fabOpacityEffect);
+        m_fabOpacityEffect->setOpacity(1.0); 
+        m_fabAutoHideTimer->start(); 
+    }
 }
 
-MainWindow::~MainWindow()
-{
-}
+MainWindow::~MainWindow() {}
 
 void MainWindow::setupUI()
 {
     QWidget *centralWidget = new QWidget(this);
-    setCentralWidget(centralWidget);
-    QHBoxLayout *mainLayout = new QHBoxLayout(centralWidget);
-    mainSplitter = new QSplitter(Qt::Horizontal, centralWidget);
+    QVBoxLayout *rootVLayout = new QVBoxLayout(centralWidget); 
+    rootVLayout->setContentsMargins(0,0,0,0);
+    rootVLayout->setSpacing(0);
 
+    mainSplitter = new QSplitter(Qt::Horizontal, centralWidget); 
     thumbnailListView = new QListView(mainSplitter);
     thumbnailListView->setModel(m_thumbnailModel);
     thumbnailListView->setFixedWidth(thumbnailDefaultSize.width() + 40); 
@@ -151,15 +227,11 @@ void MainWindow::setupUI()
     centerPanelLayout->setContentsMargins(0,0,0,0);
     mediaDisplayContainer = new QStackedWidget(centerPanelWidget);
     imageScrollArea = new QScrollArea(mediaDisplayContainer);
-    imageScrollArea->setBackgroundRole(QPalette::Dark);
-    imageScrollArea->setAlignment(Qt::AlignCenter);
+    imageScrollArea->setBackgroundRole(QPalette::Dark); imageScrollArea->setAlignment(Qt::AlignCenter);
     imageDisplayLabel = new QLabel(imageScrollArea);
-    imageDisplayLabel->setObjectName("imageDisplayLabel");
-    imageDisplayLabel->setBackgroundRole(QPalette::Dark);
-    imageDisplayLabel->setAlignment(Qt::AlignCenter);
-    imageDisplayLabel->setScaledContents(false);
-    imageScrollArea->setWidget(imageDisplayLabel);
-    imageScrollArea->setWidgetResizable(true);
+    imageDisplayLabel->setObjectName("imageDisplayLabel"); imageDisplayLabel->setBackgroundRole(QPalette::Dark);
+    imageDisplayLabel->setAlignment(Qt::AlignCenter); imageDisplayLabel->setScaledContents(false);
+    imageScrollArea->setWidget(imageDisplayLabel); imageScrollArea->setWidgetResizable(true);
     mediaDisplayContainer->addWidget(imageScrollArea);
     videoDisplayWidget = new QVideoWidget(mediaDisplayContainer);
     mediaPlayer->setVideoOutput(videoDisplayWidget);
@@ -169,17 +241,12 @@ void MainWindow::setupUI()
     QHBoxLayout *controlsLayout = new QHBoxLayout(videoControlsWidget);
     controlsLayout->setContentsMargins(5,2,5,2);
     playPauseButton = new QPushButton(videoControlsWidget);
-    playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
-    playPauseButton->setToolTip(tr("Play"));
-    connect(playPauseButton, &QPushButton::clicked, this, [this](){
-        if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) mediaPlayer->pause(); else mediaPlayer->play();
-    });
+    playPauseButton->setIcon(style()->standardIcon(QStyle::SP_MediaPlay)); playPauseButton->setToolTip(tr("Play"));
+    connect(playPauseButton, &QPushButton::clicked, this, [this](){ if (mediaPlayer->playbackState() == QMediaPlayer::PlayingState) mediaPlayer->pause(); else mediaPlayer->play(); });
     controlsLayout->addWidget(playPauseButton);
     seekerSlider = new QSlider(Qt::Horizontal, videoControlsWidget);
     seekerSlider->setRange(0,0);
-    connect(seekerSlider, &QSlider::sliderMoved, this, [this](int position){
-        mediaPlayer->setPosition(static_cast<qint64>(position) * 1000);
-    });
+    connect(seekerSlider, &QSlider::sliderMoved, this, [this](int position){ mediaPlayer->setPosition(static_cast<qint64>(position) * 1000); });
     controlsLayout->addWidget(seekerSlider);
     durationLabel = new QLabel("--:--", videoControlsWidget);
     controlsLayout->addWidget(durationLabel);
@@ -187,54 +254,240 @@ void MainWindow::setupUI()
     videoControlsWidget->setVisible(false);
     mainSplitter->addWidget(centerPanelWidget);
     
-    QWidget *rightPanelContainer = new QWidget(mainSplitter);
-    QVBoxLayout *rightPanelLayout = new QVBoxLayout(rightPanelContainer);
-    rightPanelLayout->setContentsMargins(0,0,0,0); 
-    captionModeGroupBox = new QGroupBox(tr("Caption Mode"), rightPanelContainer);
-    QHBoxLayout *captionModeLayout = new QHBoxLayout(captionModeGroupBox);
-    nlpModeRadioButton = new QRadioButton(tr("NLP"), captionModeGroupBox);
-    tagsModeRadioButton = new QRadioButton(tr("Tags"), captionModeGroupBox);
-    nlpModeRadioButton->setChecked(true); 
-    captionModeLayout->addWidget(nlpModeRadioButton);
-    captionModeLayout->addWidget(tagsModeRadioButton);
-    captionModeGroupBox->setLayout(captionModeLayout);
-    rightPanelLayout->addWidget(captionModeGroupBox);
-    QButtonGroup *captionModeButtonGroup = new QButtonGroup(this);
-    captionModeButtonGroup->addButton(nlpModeRadioButton);
-    captionModeButtonGroup->addButton(tagsModeRadioButton);
-    connect(nlpModeRadioButton, &QRadioButton::toggled, this, &MainWindow::onCaptionModeChanged);
-    rightPanelSplitter = new QSplitter(Qt::Vertical, rightPanelContainer);
-    captionEditor = new QTextEdit(rightPanelSplitter);
+    QWidget *rightPanelContainer = new QWidget(); 
+    QVBoxLayout *rightPanelVLayout = new QVBoxLayout(rightPanelContainer);
+    rightPanelVLayout->setContentsMargins(2,2,2,2); 
+    
+    QHBoxLayout* captionHeaderLayout = new QHBoxLayout();
+    m_nlpModeRadioMain = new QRadioButton(tr("NLP"), rightPanelContainer);
+    m_tagsModeRadioMain = new QRadioButton(tr("Tags"), rightPanelContainer);
+    m_nlpModeRadioMain->setChecked(true);
+    QHBoxLayout *nlpTagsLayout = new QHBoxLayout(); 
+    nlpTagsLayout->addWidget(m_nlpModeRadioMain);
+    nlpTagsLayout->addWidget(m_tagsModeRadioMain);
+    nlpTagsLayout->setContentsMargins(0,0,0,0); 
+    QButtonGroup *mainCaptionModeGroup = new QButtonGroup(this);
+    mainCaptionModeGroup->addButton(m_nlpModeRadioMain);
+    mainCaptionModeGroup->addButton(m_tagsModeRadioMain);
+    captionHeaderLayout->addLayout(nlpTagsLayout); 
+    captionHeaderLayout->addStretch(); 
+    m_bulbButton = new QToolButton(rightPanelContainer);
+    m_bulbButton->setIcon(style()->standardIcon(QStyle::SP_DialogHelpButton)); 
+    m_bulbButton->setToolTip(tr("Generate Auto-Caption Suggestion"));
+    connect(m_bulbButton, &QToolButton::clicked, this, &MainWindow::onBulbButtonClicked);
+    captionHeaderLayout->addWidget(m_bulbButton);
+    rightPanelVLayout->addLayout(captionHeaderLayout);
+
+    captionEditor = new QTextEdit(rightPanelContainer); 
     captionEditor->setPlaceholderText(tr("Caption will appear here..."));
+    captionEditor->installEventFilter(this); 
     connect(captionEditor, &QTextEdit::textChanged, this, [this]() { 
         captionChangedSinceLoad = true; 
         if (currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
             if(captionEditor) unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
         }
     });
-    rightPanelSplitter->addWidget(captionEditor);
-    fileDetailsLabel = new QLabel(tr("File details will appear here..."), rightPanelSplitter);
-    fileDetailsLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
-    fileDetailsLabel->setWordWrap(true);
-    rightPanelSplitter->addWidget(fileDetailsLabel);
-    rightPanelSplitter->setSizes({400, 100}); 
-    rightPanelLayout->addWidget(rightPanelSplitter, 1); 
-    rightPanelContainer->setLayout(rightPanelLayout);
-    mainSplitter->addWidget(rightPanelContainer);
-    
+    rightPanelVLayout->addWidget(captionEditor, 1); 
+    fileDetailsLabel = new QLabel(tr("File details will appear here..."), rightPanelContainer); 
+    fileDetailsLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft); fileDetailsLabel->setWordWrap(true);
+    fileDetailsLabel->setFixedHeight(fileDetailsLabel->sizeHint().height() * 3); 
+    rightPanelVLayout->addWidget(fileDetailsLabel);
+    mainSplitter->addWidget(rightPanelContainer); 
     mainSplitter->setStretchFactor(1, 1); 
     mainSplitter->setStretchFactor(2, 0); 
-    mainLayout->addWidget(mainSplitter);
-    centralWidget->setLayout(mainLayout);
     mainSplitter->setSizes({thumbnailDefaultSize.width() + 40, 700, 300});
+
+    rootVLayout->addWidget(mainSplitter, 1); 
+    setCentralWidget(centralWidget); 
+
+    m_sparkleActionButton = new QToolButton(this);
+    m_sparkleActionButton->setGraphicsEffect(m_fabOpacityEffect); 
+    m_sparkleActionButton->setIcon(style()->standardIcon(QStyle::SP_DialogYesButton)); 
+    m_sparkleActionButton->setIconSize(QSize(24, 24)); 
+    m_sparkleActionButton->setFixedSize(QSize(36, 36)); 
+    m_sparkleActionButton->setToolTip(tr("Auto-Caption Settings"));
+    m_sparkleActionButton->setStyleSheet("QToolButton { border: 1px solid #8f8f91; border-radius: 18px; background-color: palette(window); } QToolButton:hover { background-color: palette(highlight); }");
+    m_sparkleActionButton->move(width() - m_sparkleActionButton->width() - 20, height() - m_sparkleActionButton->height() - 20); 
+    m_sparkleActionButton->installEventFilter(this); 
+
+    m_autoCaptionSettingsPanel = new AutoCaptionSettingsPanel(this); 
+    m_autoCaptionSettingsPanel->setWindowFlags(Qt::Popup | Qt::FramelessWindowHint); 
+    m_autoCaptionSettingsPanel->setFixedSize(m_autoCaptionSettingsPanel->sizeHint()); 
+    m_autoCaptionSettingsPanel->setVisible(false);
+    m_isAutoCaptionPanelVisible = false;
 }
 
-void MainWindow::onCaptionModeChanged()
-{
-    if (nlpModeRadioButton && nlpModeRadioButton->isChecked()) {
-        qDebug() << "Caption Mode: NLP";
-    } else if (tagsModeRadioButton && tagsModeRadioButton->isChecked()) {
-        qDebug() << "Caption Mode: Tags";
+void MainWindow::toggleAutoCaptionPanel() {
+    if (!m_autoCaptionSettingsPanel || !m_sparkleActionButton || !m_fabOpacityEffect || !m_fabFadeAnimation) return;
+
+    if (m_isAutoCaptionPanelVisible) {
+        m_autoCaptionSettingsPanel->hide();
+        m_fabAutoHideTimer->start(); 
+    } else {
+        m_fabAutoHideTimer->stop(); 
+        m_fabFadeAnimation->stop();
+        m_fabOpacityEffect->setOpacity(1.0);
+        m_sparkleActionButton->show(); 
+
+        QPoint buttonPos = m_sparkleActionButton->mapToGlobal(QPoint(0,0));
+        QPoint panelPos(buttonPos.x() - m_autoCaptionSettingsPanel->width() + m_sparkleActionButton->width()/2 , 
+                        buttonPos.y() - m_autoCaptionSettingsPanel->height());
+        
+        if (panelPos.x() < 0) panelPos.setX(0);
+        if (panelPos.y() < 0) panelPos.setY(0);
+        
+        m_autoCaptionSettingsPanel->move(panelPos);
+        m_autoCaptionSettingsPanel->show();
+        m_autoCaptionSettingsPanel->raise(); 
+    }
+    m_isAutoCaptionPanelVisible = !m_isAutoCaptionPanelVisible;
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event) {
+    QMainWindow::resizeEvent(event);
+    if (m_sparkleActionButton && !m_isFabDragging) { 
+        int fabX = m_sparkleActionButton->x();
+        int fabY = m_sparkleActionButton->y();
+        int newX = width() - m_sparkleActionButton->width() - 20;
+        int newY = height() - m_sparkleActionButton->height() - 20;
+
+        if (fabX > width() - m_sparkleActionButton->width() * 2 || fabY > height() - m_sparkleActionButton->height() * 2) {
+             m_sparkleActionButton->move(newX, newY);
+        } else { 
+            fabX = qBound(0, fabX, width() - m_sparkleActionButton->width());
+            fabY = qBound(0, fabY, height() - m_sparkleActionButton->height());
+            m_sparkleActionButton->move(fabX, fabY);
+        }
+    }
+    if (m_isAutoCaptionPanelVisible && m_autoCaptionSettingsPanel && m_sparkleActionButton) {
+        QPoint buttonPos = m_sparkleActionButton->mapToGlobal(QPoint(0,0));
+        QPoint panelPos(buttonPos.x() - m_autoCaptionSettingsPanel->width() + m_sparkleActionButton->width()/2 , 
+                        buttonPos.y() - m_autoCaptionSettingsPanel->height());
+        panelPos = mapFromGlobal(panelPos); 
+        
+        panelPos.setX(qBound(0, panelPos.x(), width() - m_autoCaptionSettingsPanel->width()));
+        panelPos.setY(qBound(0, panelPos.y(), height() - m_autoCaptionSettingsPanel->height()));
+        
+        m_autoCaptionSettingsPanel->move(mapToGlobal(panelPos)); 
+    }
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
+    if (watched == m_sparkleActionButton) {
+        QMouseEvent *mouseEvent = static_cast<QMouseEvent*>(event); 
+        switch (event->type()) {
+            case QEvent::MouseButtonPress:
+                if (mouseEvent->button() == Qt::LeftButton) {
+                    m_isFabDragging = false; 
+                    m_fabDragStartPosition = mouseEvent->pos(); 
+                    return true; 
+                }
+                break; 
+            case QEvent::MouseMove:
+                if (mouseEvent->buttons() & Qt::LeftButton) { 
+                    if (!m_isFabDragging) {
+                        if ((mouseEvent->pos() - m_fabDragStartPosition).manhattanLength() >= QApplication::startDragDistance()) {
+                            m_isFabDragging = true;
+                        }
+                    }
+                    if (m_isFabDragging) {
+                        QPoint newPos = m_sparkleActionButton->pos() + mouseEvent->pos() - m_fabDragStartPosition;
+                        newPos.setX(qBound(0, newPos.x(), width() - m_sparkleActionButton->width()));
+                        newPos.setY(qBound(0, newPos.y(), height() - m_sparkleActionButton->height()));
+                        m_sparkleActionButton->move(newPos);
+                    }
+                    return true; 
+                }
+                break; 
+            case QEvent::MouseButtonRelease:
+                if (mouseEvent->button() == Qt::LeftButton) {
+                    bool wasDragging = m_isFabDragging;
+                    m_isFabDragging = false; 
+                    if (!wasDragging) { 
+                        toggleAutoCaptionPanel(); 
+                    }
+                    return true; 
+                }
+                break; 
+            default:
+                return false; 
+        }
+        return false; 
+    } else if (watched == captionEditor) {
+        if (event->type() == QEvent::KeyPress) {
+            QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
+            if (keyEvent->key() == Qt::Key_Tab && !m_suggestedCaption.isEmpty()) {
+                qDebug() << "Tab pressed in captionEditor. m_suggestedCaption:" << m_suggestedCaption;
+                qDebug() << "Editor text before:" << captionEditor->toPlainText();
+                qDebug() << "Editor placeholder before:" << captionEditor->placeholderText();
+
+                captionEditor->setPlainText(m_suggestedCaption);
+                captionEditor->setPlaceholderText(""); 
+                
+                qDebug() << "Editor text after:" << captionEditor->toPlainText();
+
+                QTextCursor cursor = captionEditor->textCursor();
+                cursor.movePosition(QTextCursor::End);
+                captionEditor->setTextCursor(cursor);
+                
+                m_suggestedCaption.clear();
+                captionChangedSinceLoad = true;
+                return true; 
+            }
+        }
+    }
+    return QMainWindow::eventFilter(watched, event); 
+}
+
+void MainWindow::onBulbButtonClicked() {
+    if (!m_autoCaptionManager) return;
+    if (currentMediaIndex < 0 || currentMediaIndex >= mediaFiles.count()) {
+        statusBar()->showMessage(tr("No media selected."), 3000);
+        return;
+    }
+    QString imagePath = mediaFiles.at(currentMediaIndex);
+    m_autoCaptionManager->generateCaptionForImage(imagePath);
+    statusBar()->showMessage(tr("Requesting auto-caption for %1...").arg(QFileInfo(imagePath).fileName()), 3000);
+}
+
+void MainWindow::updateCaptionWithSuggestion(const QStringList &tags, const QString &forImagePath, bool autoFill) {
+    if (currentMediaIndex < 0 || currentMediaIndex >= mediaFiles.count() || mediaFiles.at(currentMediaIndex) != forImagePath) {
+        return; 
+    }
+    m_suggestedCaption = tags.join(", "); 
+    
+    if (captionEditor) {
+        if (autoFill) { 
+            captionEditor->setPlainText(m_suggestedCaption);
+            captionEditor->setPlaceholderText(""); 
+        } else { 
+            if (captionEditor->toPlainText().isEmpty()) {
+                captionEditor->setPlaceholderText(m_suggestedCaption); 
+            }
+            
+            if (!m_suggestedCaption.isEmpty()) {
+                QPoint tipPos = captionEditor->mapToGlobal(QPoint(0, captionEditor->height() / 2));
+                QToolTip::showText(tipPos, tr("Suggestion available. Press Tab to apply."), captionEditor, captionEditor->rect(), 3000);
+                statusBar()->showMessage(tr("Suggestion available. Press Tab to apply."), 5000);
+            }
+        }
+    }
+    qDebug() << "Suggestion received:" << m_suggestedCaption << "AutoFill:" << autoFill;
+}
+
+void MainWindow::handleAutoCaptionError(const QString &errorMessage) {
+    statusBar()->showMessage(tr("Auto-Caption Error: %1").arg(errorMessage), 5000);
+    QMessageBox::warning(this, tr("Auto-Caption Error"), errorMessage);
+}
+
+void MainWindow::showAutoCaptionSettingsDialog() {
+    if (!m_autoCaptionManager || !m_autoCaptionSettingsPanel) return;
+    QString currentModel = "SmilingWolf/wd-vit-tagger-v3"; 
+    QVariantMap currentSettings = m_autoCaptionManager->getModelSettings(); 
+    
+    AutoCaptionSettingsDialog dialog(currentModel, currentSettings, this);
+    if (dialog.exec() == QDialog::Accepted) {
+        m_autoCaptionManager->applyModelSettings(currentModel, dialog.getSettings());
     }
 }
 
@@ -277,9 +530,22 @@ void MainWindow::createMenus() {
     openDirAction->setShortcuts(QKeySequence::Open);
     connect(openDirAction, &QAction::triggered, this, &MainWindow::openDirectory);
     fileMenu->addAction(openDirAction);
+
+    openProjectAction = new QAction(tr("Open P&roject..."), this);
+    connect(openProjectAction, &QAction::triggered, this, &MainWindow::openProject);
+    fileMenu->addAction(openProjectAction);
+
+    saveProjectAction = new QAction(tr("&Save Project"), this); 
+    saveProjectAction->setShortcuts(QKeySequence::Save); 
+    connect(saveProjectAction, &QAction::triggered, this, &MainWindow::saveProject);
+    fileMenu->addAction(saveProjectAction);
+
+    saveProjectAsAction = new QAction(tr("Save Project &As..."), this);
+    connect(saveProjectAsAction, &QAction::triggered, this, &MainWindow::saveProjectAs);
+    fileMenu->addAction(saveProjectAsAction);
+    
     fileMenu->addSeparator();
-    QAction *saveCaptionAction = new QAction(tr("&Save Caption"), this);
-    saveCaptionAction->setShortcuts(QKeySequence::Save);
+    QAction *saveCaptionAction = new QAction(tr("Save &Caption (current file)"), this); 
     connect(saveCaptionAction, &QAction::triggered, this, &MainWindow::saveCurrentCaption);
     fileMenu->addAction(saveCaptionAction);
     fileMenu->addSeparator();
@@ -294,6 +560,12 @@ void MainWindow::createMenus() {
     exitAction->setShortcuts(QKeySequence::Quit);
     connect(exitAction, &QAction::triggered, qApp, &QApplication::quit);
     fileMenu->addAction(exitAction);
+
+    QMenu *viewMenu = menuBar()->addMenu(tr("&View"));
+    refreshThumbnailsAction = new QAction(tr("&Refresh Thumbnails"), this);
+    connect(refreshThumbnailsAction, &QAction::triggered, this, &MainWindow::onRefreshThumbnails);
+    viewMenu->addAction(refreshThumbnailsAction);
+
     QMenu *statisticMenu = menuBar()->addMenu(tr("&Statistic"));
     statisticsAction = new QAction(tr("Show &Dataset Statistics..."), this);
     connect(statisticsAction, &QAction::triggered, this, &MainWindow::showStatisticsDialog);
@@ -318,9 +590,11 @@ void MainWindow::openDirectory() {
                                                        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (!dirPath.isEmpty()) {
         currentDirectory = dirPath;
+        m_currentProjectPath.clear(); 
         unsavedCaptions.clear(); 
         statusBar()->showMessage(tr("Loading files from: %1").arg(currentDirectory));
         loadFiles(currentDirectory);
+        setWindowTitle(tr("Haigaku Manager - %1").arg(QDir(currentDirectory).dirName()));
     }
 }
 void MainWindow::loadFiles(const QString &dirPath)
@@ -337,6 +611,11 @@ void MainWindow::loadFiles(const QString &dirPath)
     QStringList filesFound = directory.entryList(nameFilters, QDir::Files | QDir::NoDotAndDotDot, QDir::Name);
     if (filesFound.isEmpty()) { 
         statusBar()->showMessage(tr("No supported media files found in %1").arg(dirPath));
+        if(mediaDisplayContainer && imageScrollArea) mediaDisplayContainer->setCurrentWidget(imageScrollArea);
+        if(imageDisplayLabel) { imageDisplayLabel->clear(); imageDisplayLabel->setText(tr("No media files found in directory."));}
+        if(videoControlsWidget) videoControlsWidget->setVisible(false);
+        if(captionEditor) captionEditor->clear();
+        if(fileDetailsLabel) fileDetailsLabel->setText(tr("File details will appear here..."));
         return;
     }
     QStringList fullFilePaths;
@@ -499,19 +778,26 @@ void MainWindow::applyScoreToCaption(int scoreValue)  {
     captionEditor->setPlainText(parts.join(", "));
 }
 void MainWindow::keyPressEvent(QKeyEvent *event) { 
-    if (captionEditor && captionEditor->hasFocus()) {
-        QMainWindow::keyPressEvent(event); return;
-    }
+    // Tab handling is now in eventFilter for captionEditor
+    // if (captionEditor && captionEditor->hasFocus()) {
+    //     QMainWindow::keyPressEvent(event); // Let base handle other keys for editor
+    //     return;
+    // }
     switch (event->key()) {
     case Qt::Key_S: saveCurrentCaption(); nextMedia(); break;
     case Qt::Key_Right: nextMedia(); break;
     case Qt::Key_Left: previousMedia(); break;
-    case Qt::Key_Delete: 
-        deleteCurrentMediaItem(); 
-        break;
+    case Qt::Key_Delete: deleteCurrentMediaItem(); break;
     case Qt::Key_1: case Qt::Key_2: case Qt::Key_3: case Qt::Key_4: case Qt::Key_5: 
     case Qt::Key_6: case Qt::Key_7: case Qt::Key_8: case Qt::Key_9:
-        applyScoreToCaption(event->key() - Qt::Key_0); saveCurrentCaption(); nextMedia(); break;
+        if (!(captionEditor && captionEditor->hasFocus())) { 
+             applyScoreToCaption(event->key() - Qt::Key_0); 
+             saveCurrentCaption(); 
+             nextMedia();
+        } else {
+            QMainWindow::keyPressEvent(event);
+        }
+        break;
     default: QMainWindow::keyPressEvent(event);
     }
 }
@@ -533,99 +819,122 @@ void MainWindow::previousMedia() {
 }
 void MainWindow::performAutoSave() { 
     qDebug() << "Performing auto-save...";
-    int savedCount = 0;
-    QStringList keysToSave = unsavedCaptions.keys();
-    for (const QString &filePathToSave : keysToSave) {
-        if (!mediaFiles.contains(filePathToSave)) continue; 
-        QString captionText = unsavedCaptions.value(filePathToSave);
-        QFileInfo mediaInfo(filePathToSave);
-        QString captionPath = mediaInfo.absolutePath() + "/" + mediaInfo.completeBaseName() + ".txt";
-        QFile captionFile(captionPath);
-        if (captionFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-            QTextStream out(&captionFile); out << captionText; captionFile.close();
-            unsavedCaptions.remove(filePathToSave); savedCount++;
-        } else {
-            qWarning() << "Auto-save failed for" << captionPath;
+    bool projectSaved = false;
+    if (!m_currentProjectPath.isEmpty() && !currentDirectory.isEmpty()) {
+        // Save the project file
+        QSettings projectFile(m_currentProjectPath, QSettings::IniFormat);
+        projectFile.setValue("Project/DirectoryPath", currentDirectory);
+
+        projectFile.beginGroup("Captions");
+        projectFile.remove(""); 
+
+        QDir dir(currentDirectory);
+        // First, ensure the current editor's content is in unsavedCaptions if it's dirty
+        if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count() && captionEditor) {
+            unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
+        }
+
+        for (auto it = unsavedCaptions.constBegin(); it != unsavedCaptions.constEnd(); ++it) {
+            QString absoluteFilePath = it.key();
+            QString relativeFilePath = dir.relativeFilePath(absoluteFilePath);
+            if (!relativeFilePath.isEmpty()) {
+                projectFile.setValue(relativeFilePath, it.value());
+            } else {
+                qWarning() << "Auto-save (project): Could not make file path relative for project save:" << absoluteFilePath;
+            }
+        }
+        projectFile.endGroup();
+        projectFile.sync();
+        projectSaved = true;
+        // Note: We don't clear captionChangedSinceLoad or unsavedCaptions here,
+        // as this is an auto-save. The "dirty" state relative to manual save actions remains.
+    }
+
+    // The original logic for saving individual .txt files can be kept or removed
+    // depending on whether .hmproj is the sole source of truth for captions when a project is open.
+    // For now, let's assume .hmproj is primary, and individual .txt save is secondary or for non-project mode.
+    // If a project is open, the .hmproj save above should cover the unsaved captions.
+    // If no project is open, the old logic might still be desired.
+    // Let's refine: only do individual .txt saves if NO project is open.
+    
+    int individualCaptionsSaved = 0;
+    if (m_currentProjectPath.isEmpty()) { // Only save individual .txt if not in project mode
+        QStringList keysToSave = unsavedCaptions.keys();
+        for (const QString &filePathToSave : keysToSave) {
+            if (!mediaFiles.contains(filePathToSave)) continue; 
+            QString captionText = unsavedCaptions.value(filePathToSave);
+            QFileInfo mediaInfo(filePathToSave);
+            QString captionPath = mediaInfo.absolutePath() + "/" + mediaInfo.completeBaseName() + ".txt";
+            QFile captionFile(captionPath);
+            if (captionFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
+                QTextStream out(&captionFile); out << captionText; captionFile.close();
+                // If not in project mode, saving a .txt means it's no longer "unsaved" in this session for that file
+                // However, unsavedCaptions is also used by project saving. This interaction needs care.
+                // For simplicity of auto-save, let's not remove from unsavedCaptions here.
+                // Manual "Save Caption" does remove it.
+                individualCaptionsSaved++;
+            } else {
+                qWarning() << "Auto-save (individual .txt) failed for" << captionPath;
+            }
         }
     }
-    if (savedCount > 0) statusBar()->showMessage(tr("Auto-saved %1 captions.").arg(savedCount), 5000);
-    else statusBar()->showMessage(tr("Auto-save: No changes to save."), 3000);
-}
 
+    if (projectSaved) {
+        statusBar()->showMessage(tr("Project auto-saved to %1.").arg(QFileInfo(m_currentProjectPath).fileName()), 5000);
+    } else if (individualCaptionsSaved > 0) {
+        statusBar()->showMessage(tr("Auto-saved %1 individual captions.").arg(individualCaptionsSaved), 5000);
+    } else {
+        statusBar()->showMessage(tr("Auto-save: No changes to save."), 3000);
+    }
+}
 void MainWindow::deleteCurrentMediaItem() {
     if (currentMediaIndex < 0 || currentMediaIndex >= mediaFiles.count()) {
         statusBar()->showMessage(tr("No media item selected to delete."), 3000);
         return;
     }
-
     QString filePathToDelete = mediaFiles.at(currentMediaIndex);
     QFileInfo mediaInfo(filePathToDelete);
-
-    // Delete media file
     if (QFile::remove(filePathToDelete)) {
         statusBar()->showMessage(tr("Deleted media file: %1").arg(mediaInfo.fileName()), 3000);
     } else {
         statusBar()->showMessage(tr("Error deleting media file: %1").arg(mediaInfo.fileName()), 3000);
         qWarning() << "Error deleting media file:" << filePathToDelete;
-        // Proceed to delete caption anyway, or stop? For now, proceed.
     }
-
-    // Delete associated caption files (.txt and .caption)
     QString baseName = mediaInfo.absolutePath() + "/" + mediaInfo.completeBaseName();
     QString captionPathTxt = baseName + ".txt";
     QString captionPathCaption = baseName + ".caption";
-
     if (QFile::exists(captionPathTxt)) {
-        if (QFile::remove(captionPathTxt)) {
-            qDebug() << "Deleted caption file:" << captionPathTxt;
-        } else {
-            qWarning() << "Error deleting caption file:" << captionPathTxt;
-        }
+        if (QFile::remove(captionPathTxt)) qDebug() << "Deleted caption file:" << captionPathTxt;
+        else qWarning() << "Error deleting caption file:" << captionPathTxt;
     }
     if (QFile::exists(captionPathCaption)) {
-        if (QFile::remove(captionPathCaption)) {
-            qDebug() << "Deleted caption file:" << captionPathCaption;
-        } else {
-            qWarning() << "Error deleting caption file:" << captionPathCaption;
-        }
+        if (QFile::remove(captionPathCaption)) qDebug() << "Deleted caption file:" << captionPathCaption;
+        else qWarning() << "Error deleting caption file:" << captionPathCaption;
     }
-
-    // Remove from internal lists and update UI
     unsavedCaptions.remove(filePathToDelete);
     mediaFiles.removeAt(currentMediaIndex);
-    
-    // Refresh the model with the modified mediaFiles list
-    // This will also trigger ThumbnailLoader to clear its queue and re-evaluate.
     if (m_thumbnailModel) {
-        m_thumbnailModel->setFilePaths(mediaFiles); // This re-populates the model
+        m_thumbnailModel->setFilePaths(mediaFiles); 
     }
-    
     if (mediaFiles.isEmpty()) {
         currentMediaIndex = -1;
-        // Clear displays
         if(imageDisplayLabel) imageDisplayLabel->clear();
-        if(videoDisplayWidget && mediaPlayer) mediaPlayer->setSource(QUrl()); // Clear video source
+        if(videoDisplayWidget && mediaPlayer) mediaPlayer->setSource(QUrl()); 
         if(videoControlsWidget) videoControlsWidget->setVisible(false);
         if(captionEditor) captionEditor->clear();
         if(fileDetailsLabel) fileDetailsLabel->setText(tr("File details will appear here..."));
         statusBar()->showMessage(tr("All media deleted or directory empty."), 3000);
     } else {
-        // Adjust currentMediaIndex if it's now out of bounds
         if (currentMediaIndex >= mediaFiles.count()) {
             currentMediaIndex = mediaFiles.count() - 1;
         }
-        // If currentMediaIndex became -1 (e.g. last item deleted from a list of 1),
-        // and list is not empty, set to 0.
         if (currentMediaIndex < 0 && !mediaFiles.isEmpty()) {
             currentMediaIndex = 0;
         }
-        displayMediaAtIndex(currentMediaIndex); // Display the item at the (potentially new) current index
+        displayMediaAtIndex(currentMediaIndex); 
     }
-     // After model is updated, trigger a load for the new visible range
     QTimer::singleShot(0, this, &MainWindow::loadVisibleThumbnails);
 }
-
-
 void MainWindow::showStatisticsDialog() { 
     if (mediaFiles.isEmpty() && currentDirectory.isEmpty()) {
         QMessageBox::information(this, tr("Statistics"), tr("Please open a directory first.")); return;
@@ -638,4 +947,201 @@ void MainWindow::showAboutDialog()  {
                        tr("<b>Haigaku Manager</b><br>Version 0.1 (Alpha)<br><br>"
                           "A dataset manager for images and videos.<br>"
                           "Created by Ketengan Diffusion™.<br><br>Built with Qt."));
+}
+
+void MainWindow::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_sparkleActionButton && m_fabOpacityEffect && m_fabFadeAnimation && m_fabAutoHideTimer) {
+        if (m_fabFadeAnimation->state() == QAbstractAnimation::Running && m_fabFadeAnimation->direction() == QAbstractAnimation::Backward) {
+            m_fabFadeAnimation->stop();
+        }
+        if (m_fabOpacityEffect->opacity() < 1.0 || !m_sparkleActionButton->isVisible()) {
+             m_sparkleActionButton->show(); 
+             m_fabFadeAnimation->setDirection(QAbstractAnimation::Forward); 
+             m_fabFadeAnimation->setStartValue(m_fabOpacityEffect->opacity());
+             m_fabFadeAnimation->setEndValue(1.0);
+             m_fabFadeAnimation->start();
+        } else {
+             m_sparkleActionButton->show();
+        }
+        m_fabAutoHideTimer->start();   
+    }
+    QMainWindow::mouseMoveEvent(event);
+}
+
+void MainWindow::fabAutoHideTimeout()
+{
+    if (m_sparkleActionButton && m_fabOpacityEffect && m_fabFadeAnimation &&
+        !m_sparkleActionButton->rect().contains(m_sparkleActionButton->mapFromGlobal(QCursor::pos())) &&
+        m_autoCaptionSettingsPanel && !m_autoCaptionSettingsPanel->isVisible()) { 
+        
+        if (m_fabFadeAnimation->state() == QAbstractAnimation::Running && m_fabFadeAnimation->direction() == QAbstractAnimation::Forward) {
+            m_fabFadeAnimation->stop();
+        }
+        if (m_fabOpacityEffect->opacity() > 0.0) {
+            m_fabFadeAnimation->setDirection(QAbstractAnimation::Backward); 
+            m_fabFadeAnimation->setStartValue(m_fabOpacityEffect->opacity());
+            m_fabFadeAnimation->setEndValue(0.0);
+            m_fabFadeAnimation->start();
+        }
+    }
+}
+
+void MainWindow::fabAnimationFinished()
+{
+    if (m_sparkleActionButton && m_fabOpacityEffect) {
+        if (m_fabOpacityEffect->opacity() == 0.0) {
+            m_sparkleActionButton->hide();
+        } else if (m_fabOpacityEffect->opacity() == 1.0) {
+            m_sparkleActionButton->show(); 
+        }
+    }
+}
+
+void MainWindow::onRefreshThumbnails()
+{
+    if (m_thumbnailModel) {
+        m_thumbnailModel->clearCache();
+    }
+    if (m_thumbnailLoaderService) {
+        m_thumbnailLoaderService->clearQueue(); 
+    }
+    loadVisibleThumbnails(); 
+    statusBar()->showMessage(tr("Thumbnails refreshed."), 3000);
+}
+
+void MainWindow::saveProjectAs()
+{
+    QString filePath = QFileDialog::getSaveFileName(this, tr("Save Project As..."),
+                                                    m_currentProjectPath.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : QFileInfo(m_currentProjectPath).path(),
+                                                    tr("Haigaku Manager Project (*.hmproj)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    if (!filePath.endsWith(".hmproj", Qt::CaseInsensitive)) {
+        filePath += ".hmproj";
+    }
+
+    m_currentProjectPath = filePath;
+    QSettings projectFile(m_currentProjectPath, QSettings::IniFormat);
+
+    projectFile.setValue("Project/DirectoryPath", currentDirectory);
+
+    projectFile.beginGroup("Captions");
+    projectFile.remove(""); 
+
+    QDir dir(currentDirectory);
+    for (auto it = unsavedCaptions.constBegin(); it != unsavedCaptions.constEnd(); ++it) {
+        QString absoluteFilePath = it.key();
+        QString relativeFilePath = dir.relativeFilePath(absoluteFilePath);
+        if (!relativeFilePath.isEmpty()) {
+            projectFile.setValue(relativeFilePath, it.value());
+        } else {
+            qWarning() << "Could not make file path relative for project save:" << absoluteFilePath;
+        }
+    }
+    
+    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count() && captionEditor) {
+         QString absPath = mediaFiles.at(currentMediaIndex);
+         QString relPath = dir.relativeFilePath(absPath);
+         if (!relPath.isEmpty()) {
+            projectFile.setValue(relPath, captionEditor->toPlainText());
+         }
+    }
+
+    projectFile.endGroup();
+    projectFile.sync(); 
+
+    setWindowTitle(tr("Haigaku Manager - %1").arg(QFileInfo(m_currentProjectPath).fileName()));
+    statusBar()->showMessage(tr("Project saved to %1").arg(m_currentProjectPath), 5000);
+}
+
+void MainWindow::saveProject()
+{
+    if (m_currentProjectPath.isEmpty()) {
+        saveProjectAs(); 
+        return;
+    }
+    if (currentDirectory.isEmpty()){
+        QMessageBox::information(this, tr("Save Project"), tr("Please open a directory first. No active directory to save."));
+        return;
+    }
+
+    QSettings projectFile(m_currentProjectPath, QSettings::IniFormat);
+    projectFile.setValue("Project/DirectoryPath", currentDirectory);
+
+    projectFile.beginGroup("Captions");
+    projectFile.remove(""); 
+
+    QDir dir(currentDirectory);
+    for (auto it = unsavedCaptions.constBegin(); it != unsavedCaptions.constEnd(); ++it) {
+        QString absoluteFilePath = it.key();
+        QString relativeFilePath = dir.relativeFilePath(absoluteFilePath);
+        if (!relativeFilePath.isEmpty()) {
+            projectFile.setValue(relativeFilePath, it.value());
+        } else {
+            qWarning() << "Could not make file path relative for project save:" << absoluteFilePath;
+        }
+    }
+    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count() && captionEditor) {
+         QString absPath = mediaFiles.at(currentMediaIndex);
+         QString relPath = dir.relativeFilePath(absPath);
+         if (!relPath.isEmpty()) {
+            projectFile.setValue(relPath, captionEditor->toPlainText());
+         }
+    }
+    projectFile.endGroup();
+    projectFile.sync();
+
+    statusBar()->showMessage(tr("Project saved to %1").arg(QFileInfo(m_currentProjectPath).fileName()), 5000);
+}
+
+void MainWindow::openProject()
+{
+    QString filePath = QFileDialog::getOpenFileName(this, tr("Open Project"),
+                                                    m_currentProjectPath.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation) : QFileInfo(m_currentProjectPath).path(),
+                                                    tr("Haigaku Manager Project (*.hmproj)"));
+    if (filePath.isEmpty()) {
+        return;
+    }
+
+    QSettings projectFile(filePath, QSettings::IniFormat);
+    QString projectDirectoryPath = projectFile.value("Project/DirectoryPath").toString();
+
+    if (projectDirectoryPath.isEmpty() || !QDir(projectDirectoryPath).exists()) {
+        QMessageBox::warning(this, tr("Open Project Error"), tr("Invalid or missing directory path in project file."));
+        m_currentProjectPath.clear(); 
+        setWindowTitle(tr("Haigaku Manager"));
+        return;
+    }
+    
+    m_currentProjectPath = filePath;
+    currentDirectory = projectDirectoryPath;
+    
+    unsavedCaptions.clear(); 
+    if(captionEditor) captionEditor->clear();
+
+    statusBar()->showMessage(tr("Opening project: %1...").arg(QFileInfo(m_currentProjectPath).fileName()));
+    QCoreApplication::processEvents(); 
+
+    loadFiles(currentDirectory); 
+
+    projectFile.beginGroup("Captions");
+    const QStringList relativeFilePaths = projectFile.allKeys();
+    QDir dir(currentDirectory);
+    for (const QString &relativeFilePath : relativeFilePaths) {
+        QString absoluteFilePath = dir.filePath(relativeFilePath);
+        unsavedCaptions[absoluteFilePath] = projectFile.value(relativeFilePath).toString();
+    }
+    projectFile.endGroup();
+
+    if (currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
+        loadCaptionForCurrentImage(); 
+    } else if (!mediaFiles.isEmpty()) {
+        displayMediaAtIndex(0); 
+    }
+
+    setWindowTitle(tr("Haigaku Manager - %1").arg(QFileInfo(m_currentProjectPath).fileName()));
+    statusBar()->showMessage(tr("Project %1 opened.").arg(QFileInfo(m_currentProjectPath).fileName()), 5000);
 }

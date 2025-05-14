@@ -78,6 +78,30 @@ void ThumbnailListModel::clear()
     }
 }
 
+void ThumbnailListModel::clearCache()
+{
+    if (m_filePaths.isEmpty()) {
+        return;
+    }
+    // To effectively clear the cache and trigger re-fetch,
+    // we can re-initialize m_thumbnails to a list of null QIcons
+    // of the same size as m_filePaths.
+    // Then emit dataChanged for all items to make the view re-query.
+    
+    // Simpler: just clear and resize. data() will request if null.
+    beginResetModel(); // This is heavy but ensures view updates correctly.
+    m_thumbnails.clear();
+    m_thumbnails.resize(m_filePaths.count()); // Fill with null QIcons
+    endResetModel();
+
+    // Alternative: emit dataChanged for all rows if beginResetModel is too disruptive
+    // if (!m_filePaths.isEmpty()) {
+    //     m_thumbnails.clear();
+    //     m_thumbnails.resize(m_filePaths.count());
+    //     emit dataChanged(index(0, 0), index(m_filePaths.count() - 1, 0), {Qt::DecorationRole});
+    // }
+}
+
 void ThumbnailListModel::setThumbnailLoader(ThumbnailLoader *loader)
 {
     m_thumbnailLoader = loader;

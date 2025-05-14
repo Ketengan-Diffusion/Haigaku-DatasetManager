@@ -27,11 +27,12 @@ public:
 
 signals:
     void thumbnailReady(int row, const QIcon &icon);
-    void workerAvailable(); // Internal signal to pick next task
+    void workerAvailable(); 
 
 private slots:
-    void onWorkerFinished(); // A worker has finished its task and is available
-    void dispatchNextRequest(); // Dispatches a request to an available worker
+    void onWorkerFinished(); 
+    void dispatchNextRequest(); 
+    void handleImageReady(int row, const QImage &scaledImage, const QString &filePath, const QSize &originalTargetSize); // Updated slot signature
 
 private:
     void startWorkers();

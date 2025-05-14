@@ -24,11 +24,11 @@ public slots:
     void processRequest(const ThumbnailRequest &request); // Slot to start processing
 
 signals:
-    void thumbnailReady(int row, const QIcon &icon);
-    void finished(); // To signal completion to ThumbnailLoader for thread management
+    void imageReady(int row, const QImage &scaledImage, const QString &filePath, const QSize &originalTargetSize); // Added originalTargetSize
+    void finished();
 
 private:
-    QIcon generateIcon(const QString& filePath, const QSize& targetSize);
+    QImage generateScaledImage(const QString& filePath, const QSize& targetSize); // Returns QImage
 };
 
 #endif // THUMBNAILWORKER_H
