@@ -11,7 +11,7 @@ set(CMAKE_AUTOUIC ON)
 # Set the source directory for resources
 set(RESOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/resources)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Multimedia MultimediaWidgets Concurrent) # Added Concurrent
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Multimedia MultimediaWidgets Concurrent Network) # Added Network
 
 # ONNX Runtime paths
 set(ONNXRUNTIME_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libs/onnxruntime)
@@ -69,7 +69,8 @@ target_link_libraries(HaigakuManager PRIVATE
     Qt6::Widgets 
     Qt6::Multimedia 
     Qt6::MultimediaWidgets
-    Qt6::Concurrent # Added Concurrent
+    Qt6::Concurrent 
+    Qt6::Network # Added Network
     "${ONNXRUNTIME_LIB_DIR}/onnxruntime.lib"
 )
 

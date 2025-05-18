@@ -147,6 +147,13 @@ MainWindow::MainWindow(QWidget *parent)
         connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::enableSuggestionWhileTypingChanged, m_autoCaptionManager, &AutoCaptionManager::setEnableSuggestionWhileTyping);
         connect(m_autoCaptionManager, &AutoCaptionManager::modelStatusChanged, 
                 m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::setModelStatus);
+        // New connections for download progress
+        connect(m_autoCaptionManager, &AutoCaptionManager::downloadProgress,
+                m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::showDownloadProgress);
+        // We can use modelStatusChanged for overall download status updates from AutoCaptionManager
+        // For example, AutoCaptionManager can emit modelStatusChanged("Download failed for X", "red")
+        // or modelStatusChanged("Download complete. Loading...", "yellow")
+        // AutoCaptionSettingsPanel::setModelStatus will then hide the progress bar if color is not "blue".
     }
     
     if (m_nlpModeRadioMain) {

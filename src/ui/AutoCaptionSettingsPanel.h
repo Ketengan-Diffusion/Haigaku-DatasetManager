@@ -5,13 +5,12 @@
 #include <QComboBox>      // Include full header
 #include <QPushButton>    // Include full header
 #include <QLabel>         // Include full header
-#include <QRadioButton>   // Include full header
-#include <QCheckBox>      // Include full header
-#include <QGroupBox>      // Include full header
-#include <QVBoxLayout>    // Include full header
+#include <QRadioButton>   
+#include <QCheckBox>      
+#include <QGroupBox>      
+#include <QVBoxLayout>    
+#include <QProgressBar>   // Added for download progress
 
-// QT_BEGIN_NAMESPACE and QT_END_NAMESPACE are not strictly needed here
-// if we include the headers directly.
 
 class AutoCaptionSettingsPanel : public QWidget 
 {
@@ -21,7 +20,12 @@ public:
     explicit AutoCaptionSettingsPanel(QWidget *parent = nullptr); 
     ~AutoCaptionSettingsPanel();
 
-    void setModelStatus(const QString &status, const QString &color); // Added declaration
+    void setModelStatus(const QString &status, const QString &color); 
+
+public slots: // Changed from private slots to public for connection from MainWindow/Manager
+    void showDownloadProgress(const QString &fileName, qint64 bytesReceived, qint64 bytesTotal);
+    void hideDownloadWidgets();
+    void setDownloadStatusMessage(const QString &message, const QString &color = "black");
 
 signals:
     void loadModelClicked(const QString &modelName);
@@ -54,6 +58,10 @@ private:
     QCheckBox *m_amdGpuCheckBox;
     QCheckBox *m_enableSuggestionCheckBox;
     QPushButton *m_advancedSettingsButton;
+
+    // Download UI
+    QLabel *m_downloadStatusLabel;
+    QProgressBar *m_downloadProgressBar;
 };
 
-#endif // AUTOCAPTIONSETTINGSPANEL_H // Renamed
+#endif // AUTOCAPTIONSETTINGSPANEL_H

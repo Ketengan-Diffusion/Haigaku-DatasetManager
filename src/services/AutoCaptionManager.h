@@ -6,8 +6,12 @@
 #include <QStringList>
 #include <QVariantMap>
 #include "WdVIT_TaggerEngine.h" 
-#include <QtConcurrent>   // Changed from <QtConcurrent/QtFuture>
+#include <QtConcurrent>   
 #include <QFutureWatcher> 
+#include <QNetworkAccessManager> // Added
+#include <QNetworkReply>         // Added
+#include <QFile>                 // Added
+#include <QUrl>                  // Added
 
 class AutoCaptionManager : public QObject
 {
@@ -37,19 +41,38 @@ public slots:
 
 signals:
     void modelStatusChanged(const QString &statusMessage, const QString &color);
-    void captionGenerated(const QStringList &tags, const QString &forImagePath, bool autoFill); // Added autoFill
+    void captionGenerated(const QStringList &tags, const QString &forImagePath, bool autoFill); 
     void errorOccurred(const QString &errorMessage);
+    // Download signals
+    void downloadProgress(const QString &fileName, qint64 bytesReceived, qint64 bytesTotal);
+    void downloadComplete(const QString &fileName, bool success, const QString &errorString); // Renamed
+    void allDownloadsCompleted();
+
 
 private slots: 
     void handleTagsGenerated(const QStringList &tags, const QString &forImagePath);
-    void handleModelLoadFinished(); // New slot
+    void handleModelLoadFinished(); 
+    // Download slots
+    void processNextDownload();
+    void onDownloadProgress(qint64 bytesReceived, qint64 bytesTotal);
+    void onDownloadFinished();
+    void onAllDownloadsCompleted();
+
 
 private:
     WdVIT_TaggerEngine *m_taggerEngine; 
     QFutureWatcher<QStringList> *m_tagGenerationWatcher; 
-    QFutureWatcher<QPair<bool, QString>> *m_modelLoadWatcher; // New watcher
+    QFutureWatcher<QPair<bool, QString>> *m_modelLoadWatcher; 
 
-    QString m_currentModelName;
+    // Download members
+    QNetworkAccessManager *m_networkManager;
+    QList<QPair<QUrl, QString>> m_downloadQueue; // Url, TargetFilePath
+    QNetworkReply *m_currentReply;
+    QFile *m_downloadedFile;
+    QString m_currentDownloadingFileNameForUI;
+    QString m_modelNameToLoadAfterDownload;
+
+    QString m_currentModelName; // Still used for general model context
     Device m_selectedDevice;
     bool m_useAmdGpu;
     bool m_enableSuggestionWhileTyping; 

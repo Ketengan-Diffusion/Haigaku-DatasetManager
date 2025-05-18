@@ -10,8 +10,9 @@
 #include <QButtonGroup>
 #include <QStyle> 
 #include <QDebug>
+#include <QProgressBar> // Added
 
-AutoCaptionSettingsPanel::AutoCaptionSettingsPanel(QWidget *parent) // Renamed
+AutoCaptionSettingsPanel::AutoCaptionSettingsPanel(QWidget *parent) 
     : QWidget(parent)
     // Initialize members 
     , m_modelComboBox(nullptr)
@@ -27,6 +28,8 @@ AutoCaptionSettingsPanel::AutoCaptionSettingsPanel(QWidget *parent) // Renamed
     , m_amdGpuCheckBox(nullptr)
     , m_enableSuggestionCheckBox(nullptr)
     , m_advancedSettingsButton(nullptr)
+    , m_downloadStatusLabel(nullptr)    // Initialize new members
+    , m_downloadProgressBar(nullptr)
 {
     setupUI();
 }
@@ -63,9 +66,21 @@ void AutoCaptionSettingsPanel::setupUI() // Renamed
     
     // Status Label
     m_statusLabel = new QLabel(tr("Model: Unloaded"), this);
-    m_statusLabel->setObjectName("statusLabel"); // For MainWindow to find if needed
+    m_statusLabel->setObjectName("statusLabel"); 
     m_statusLabel->setStyleSheet("color: red;"); 
     panelLayout->addWidget(m_statusLabel);
+
+    // Download Progress UI (initially hidden)
+    m_downloadStatusLabel = new QLabel(this);
+    m_downloadStatusLabel->setVisible(false);
+    panelLayout->addWidget(m_downloadStatusLabel);
+
+    m_downloadProgressBar = new QProgressBar(this);
+    m_downloadProgressBar->setVisible(false);
+    m_downloadProgressBar->setTextVisible(true); // Show percentage text
+    m_downloadProgressBar->setMinimum(0);
+    m_downloadProgressBar->setValue(0);
+    panelLayout->addWidget(m_downloadProgressBar);
 
     // Device Selection
     m_deviceGroupBox = new QGroupBox(tr("Device"), this);
@@ -129,4 +144,53 @@ void AutoCaptionSettingsPanel::setModelStatus(const QString &status, const QStri
     }
     if(m_loadModelButton) m_loadModelButton->setEnabled(color == "red" || color == "orange"); 
     if(m_unloadModelButton) m_unloadModelButton->setEnabled(color == "green"); 
+
+    // If status indicates loading/error, ensure download widgets are hidden
+    // unless the status is specifically about downloading.
+    // This logic might need refinement based on how AutoCaptionManager emits statuses.
+    if (color != "blue") { // Assuming "blue" is for download messages
+         hideDownloadWidgets();
+    }
+}
+
+void AutoCaptionSettingsPanel::showDownloadProgress(const QString &fileName, qint64 bytesReceived, qint64 bytesTotal) {
+    if (!m_downloadStatusLabel || !m_downloadProgressBar) return;
+
+    if (!m_downloadStatusLabel->isVisible()) m_downloadStatusLabel->setVisible(true);
+    if (!m_downloadProgressBar->isVisible()) m_downloadProgressBar->setVisible(true);
+    
+    m_downloadStatusLabel->setText(tr("Downloading %1...").arg(fileName));
+    m_downloadStatusLabel->setStyleSheet("color: blue;"); // Or another distinct color
+
+    if (bytesTotal > 0) {
+        m_downloadProgressBar->setMaximum(bytesTotal);
+        m_downloadProgressBar->setValue(bytesReceived);
+        m_downloadProgressBar->setFormat(tr("%p% (%1/%2 MB)")
+            .arg(bytesReceived / (1024.0*1024.0), 0, 'f', 1)
+            .arg(bytesTotal / (1024.0*1024.0), 0, 'f', 1));
+    } else { 
+        m_downloadProgressBar->setRange(0,0); // Busy indicator if total size unknown
+        m_downloadProgressBar->setFormat(tr("%1 MB").arg(bytesReceived / (1024.0*1024.0), 0, 'f', 1));
+    }
+}
+
+void AutoCaptionSettingsPanel::hideDownloadWidgets() {
+    if (m_downloadStatusLabel) m_downloadStatusLabel->setVisible(false);
+    if (m_downloadProgressBar) m_downloadProgressBar->setVisible(false);
+}
+
+void AutoCaptionSettingsPanel::setDownloadStatusMessage(const QString &message, const QString &color) {
+    if (!m_downloadStatusLabel) return;
+
+    if (message.isEmpty()) {
+        hideDownloadWidgets();
+    } else {
+        if (!m_downloadStatusLabel->isVisible()) m_downloadStatusLabel->setVisible(true);
+        m_downloadStatusLabel->setText(message);
+        m_downloadStatusLabel->setStyleSheet(QString("color: %1;").arg(color));
+        // If it's a final download status (not progress), hide the progress bar
+        if (m_downloadProgressBar && (color == "green" || color == "red")) {
+            m_downloadProgressBar->setVisible(false);
+        }
+    }
 }
