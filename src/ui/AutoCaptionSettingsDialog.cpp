@@ -8,7 +8,12 @@
 AutoCaptionSettingsDialog::AutoCaptionSettingsDialog(const QString &modelName, 
                                                      const QVariantMap &currentSettings, 
                                                      QWidget *parent)
-    : QDialog(parent), m_currentSettings(currentSettings)
+    : QDialog(parent), 
+      m_currentSettings(currentSettings),
+      m_charTagsFirstCheckBox(nullptr),       // Initialize members
+      m_hideRatingTagsCheckBox(nullptr),
+      m_removeSeparatorCheckBox(nullptr),
+      m_storeManualTagsWithUnderscoresCheckBox(nullptr) // Initialize new member
 {
     setWindowTitle(tr("Advanced Settings for %1").arg(modelName));
     setMinimumWidth(350);
@@ -37,11 +42,15 @@ void AutoCaptionSettingsDialog::setupUi(const QString &modelName)
         m_hideRatingTagsCheckBox->setChecked(m_currentSettings.value("hide_rating_tags", false).toBool());
         mainLayout->addWidget(m_hideRatingTagsCheckBox);
 
-        m_removeSeparatorCheckBox = new QCheckBox(tr("Remove '_' from tags (use spaces)"), this); // Corrected text
-        m_removeSeparatorCheckBox->setChecked(m_currentSettings.value("remove_separator", true).toBool()); // Default true
+        m_removeSeparatorCheckBox = new QCheckBox(tr("Remove '_' from tags (use spaces)"), this); 
+        m_removeSeparatorCheckBox->setChecked(m_currentSettings.value("remove_separator", true).toBool()); 
         mainLayout->addWidget(m_removeSeparatorCheckBox);
+
+        // New CheckBox for storing manual tags with underscores
+        m_storeManualTagsWithUnderscoresCheckBox = new QCheckBox(tr("Store manual tags with underscores (for file saving)"), this);
+        m_storeManualTagsWithUnderscoresCheckBox->setChecked(m_currentSettings.value("store_manual_tags_with_underscores", false).toBool()); // Default false
+        mainLayout->addWidget(m_storeManualTagsWithUnderscoresCheckBox);
         
-        // Add more settings specific to this model here if needed
     } else {
         mainLayout->addWidget(new QLabel(tr("No advanced settings available for this model."), this));
     }
@@ -66,6 +75,9 @@ void AutoCaptionSettingsDialog::onAccepted()
     }
     if (m_removeSeparatorCheckBox) {
         m_currentSettings["remove_separator"] = m_removeSeparatorCheckBox->isChecked();
+    }
+    if (m_storeManualTagsWithUnderscoresCheckBox) {
+        m_currentSettings["store_manual_tags_with_underscores"] = m_storeManualTagsWithUnderscoresCheckBox->isChecked();
     }
     
     QDialog::accept();

@@ -10,7 +10,8 @@ WdVIT_TaggerEngine::WdVIT_TaggerEngine()
     : m_ortEnv(ORT_LOGGING_LEVEL_WARNING, "HaigakuTagger") 
     , m_ortSession(nullptr)
     , m_modelLoaded(false)
-    , m_generalThreshold(0.35f) // Default threshold, can be made configurable
+    , m_vocabularyLoaded(false) // Initialize new flag
+    , m_generalThreshold(0.35f) 
 {
     qDebug() << "WdVIT_TaggerEngine created.";
 }
@@ -24,13 +25,21 @@ WdVIT_TaggerEngine::~WdVIT_TaggerEngine()
 bool WdVIT_TaggerEngine::loadModel(const QString &modelPath, const QString &tagsCsvPath, 
                                    bool useCpu, bool useDirectML, bool useCuda)
 {
-    if (m_modelLoaded) {
-        unloadModel();
+    if (m_modelLoaded) { // If full model is loaded, unload it first
+        unloadModel(); 
+    } else if (m_vocabularyLoaded) { // If only vocab is loaded, unload that
+        unloadVocabulary();
+    }
+
+    // Load vocabulary first
+    if (!loadTagVocabulary(tagsCsvPath)) {
+        qWarning() << "Failed to load tag vocabulary, model loading aborted.";
+        return false;
     }
 
     try {
         Ort::SessionOptions session_options;
-        session_options.SetIntraOpNumThreads(1); // Example: optimize for latency
+        session_options.SetIntraOpNumThreads(1); 
 
         // TODO: Add execution provider logic (DirectML, CUDA)
         // For now, defaults to CPU
@@ -54,50 +63,8 @@ bool WdVIT_TaggerEngine::loadModel(const QString &modelPath, const QString &tags
             m_ortSession = std::make_unique<Ort::Session>(m_ortEnv, modelPath.toStdString().c_str(), session_options);
         #endif
 
-        // Load tag vocabulary
-        QFile csvFile(tagsCsvPath);
-        if (!csvFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-            qWarning() << "Failed to open tags CSV file:" << tagsCsvPath;
-            m_ortSession.reset(); // Release session
-            return false;
-        }
-        m_tagVocabulary.clear();
-        m_tagCategories.clear(); // Clear categories as well
-        QTextStream in(&csvFile);
-        
-        if (!in.atEnd()) {
-            in.readLine(); // Discard header line "tag_id,name,category,count"
-        }
+        // Vocabulary is already loaded by loadTagVocabulary() call above.
 
-        while (!in.atEnd()) {
-            QString line = in.readLine();
-            if (line.trimmed().isEmpty()) { 
-                continue;
-            }
-            QStringList parts = line.split(',');
-            if (parts.size() >= 3) { // Need at least tag_id, name, category
-                QString tagName = parts.at(1).trimmed();
-                bool ok;
-                int category = parts.at(2).trimmed().toInt(&ok);
-                
-                if (!tagName.isEmpty() && ok) {
-                    m_tagVocabulary.push_back(tagName);
-                    m_tagCategories.push_back(category);
-                } else {
-                    qWarning() << "Skipping malformed CSV line:" << line;
-                }
-            }
-        }
-        csvFile.close();
-        if (m_tagVocabulary.empty() || m_tagCategories.size() != m_tagVocabulary.size()) {
-            qWarning() << "Tag vocabulary is empty after reading CSV:" << tagsCsvPath;
-            m_ortSession.reset();
-            return false;
-        }
-        qDebug() << "Loaded" << m_tagVocabulary.size() << "tags from" << tagsCsvPath;
-
-
-        // Get input and output node names and shapes (simplified for one input/output)
         Ort::AllocatorWithDefaultOptions allocator; 
         // Ort::AllocatedStringPtr input_name_ptr = m_ortSession->GetInputNameAllocated(0, allocator); // Correct API
         // m_inputNodeNames_str.push_back(input_name_ptr.get()); // Store as std::string
@@ -156,18 +123,94 @@ bool WdVIT_TaggerEngine::loadModel(const QString &modelPath, const QString &tags
 void WdVIT_TaggerEngine::unloadModel()
 {
     if (m_ortSession) {
-        m_ortSession.reset(); // Releases the session
+        m_ortSession.reset(); 
     }
     m_inputNodeNames.clear();
     m_outputNodeNames.clear();
-    m_tagVocabulary.clear();
+    // m_tagVocabulary.clear(); // Vocabulary is cleared by unloadVocabulary
+    // m_tagCategories.clear(); // Vocabulary is cleared by unloadVocabulary
     m_modelLoaded = false;
+    unloadVocabulary(); // Also unload vocabulary when model is unloaded
     qDebug() << "ONNX Model unloaded.";
+}
+
+void WdVIT_TaggerEngine::unloadVocabulary()
+{
+    m_tagVocabulary.clear();
+    m_tagCategories.clear();
+    m_vocabularyLoaded = false;
+    qDebug() << "Tag vocabulary unloaded.";
 }
 
 bool WdVIT_TaggerEngine::isModelLoaded() const
 {
     return m_modelLoaded;
+}
+
+bool WdVIT_TaggerEngine::isVocabularyLoaded() const
+{
+    return m_vocabularyLoaded;
+}
+
+QStringList WdVIT_TaggerEngine::getKnownTags() const
+{
+    QStringList tags;
+    if (!m_vocabularyLoaded) {
+        qWarning() << "getKnownTags called but vocabulary is not loaded.";
+        return tags;
+    }
+    for(const QString& tag : m_tagVocabulary) {
+        tags.append(tag);
+    }
+    return tags;
+}
+
+bool WdVIT_TaggerEngine::loadTagVocabulary(const QString &tagsCsvPath)
+{
+    if (m_vocabularyLoaded) {
+        unloadVocabulary();
+    }
+    QFile csvFile(tagsCsvPath);
+    if (!csvFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        qWarning() << "Failed to open tags CSV file:" << tagsCsvPath;
+        return false;
+    }
+    m_tagVocabulary.clear();
+    m_tagCategories.clear();
+    QTextStream in(&csvFile);
+    
+    if (!in.atEnd()) {
+        in.readLine(); // Discard header line
+    }
+
+    while (!in.atEnd()) {
+        QString line = in.readLine();
+        if (line.trimmed().isEmpty()) { 
+            continue;
+        }
+        QStringList parts = line.split(',');
+        if (parts.size() >= 3) { 
+            QString tagName = parts.at(1).trimmed();
+            bool ok;
+            int category = parts.at(2).trimmed().toInt(&ok);
+            
+            if (!tagName.isEmpty() && ok) {
+                m_tagVocabulary.push_back(tagName);
+                m_tagCategories.push_back(category);
+            } else {
+                qWarning() << "Skipping malformed CSV line:" << line;
+            }
+        }
+    }
+    csvFile.close();
+    if (m_tagVocabulary.empty() || m_tagCategories.size() != m_tagVocabulary.size()) {
+        qWarning() << "Tag vocabulary is empty or inconsistent after reading CSV:" << tagsCsvPath;
+        m_vocabularyLoaded = false;
+        return false;
+    }
+    m_vocabularyLoaded = true;
+    qDebug() << "Loaded" << m_tagVocabulary.size() << "tags from" << tagsCsvPath;
+    return true;
 }
 
 WdVIT_TaggerEngine::PreprocessedImage WdVIT_TaggerEngine::preprocessImage(const QImage &image, int targetHeight, int targetWidth)

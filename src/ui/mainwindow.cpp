@@ -5,6 +5,8 @@
 #include "models/ThumbnailListModel.h" 
 #include "services/ThumbnailLoader.h"  
 #include "services/AutoCaptionManager.h" 
+#include "ui/TagEditorWidget.h" 
+#include "utils/QFlowLayout.h" 
 
 #include <QApplication>
 #include <QMenuBar>
@@ -58,7 +60,9 @@ MainWindow::MainWindow(QWidget *parent)
     , videoDisplayWidget(nullptr)
     , mediaDisplayContainer(nullptr)
     , imageScrollArea(nullptr)
-    , captionEditor(nullptr)
+    , m_captionInputStackedWidget(nullptr) 
+    , captionEditor(nullptr)               
+    , m_tagEditorWidget(nullptr)           
     , thumbnailListView(nullptr) 
     , m_thumbnailModel(nullptr)  
     , m_thumbnailLoaderService(nullptr) 
@@ -100,9 +104,15 @@ MainWindow::MainWindow(QWidget *parent)
     , statisticsAction(nullptr)
     , refreshThumbnailsAction(nullptr)
     , m_currentProjectPath("") 
+    , m_storeManualTagsWithUnderscores(false) // Initialize setting
 {
     resize(1200, 800);
     setMouseTracking(true); 
+
+    // Load persistent settings
+    QSettings settings("KetenganDiffusion", "HaigakuManager");
+    m_storeManualTagsWithUnderscores = settings.value("storeManualTagsWithUnderscores", false).toBool();
+
 
     mediaPlayer = new QMediaPlayer(this);
     audioOutput = new QAudioOutput(this);
@@ -130,13 +140,25 @@ MainWindow::MainWindow(QWidget *parent)
     m_fabFadeAnimation->setDuration(300); 
     connect(m_fabFadeAnimation, &QPropertyAnimation::finished, this, &MainWindow::fabAnimationFinished);
 
+    setupUI(); // m_tagEditorWidget is created here
+    if (m_tagEditorWidget) { // Apply persistent setting after UI setup
+        m_tagEditorWidget->setStoreTagsWithUnderscores(m_storeManualTagsWithUnderscores);
+    }
 
-    setupUI(); 
     createMenus();
     createStatusBar();
 
     connect(m_autoCaptionManager, &AutoCaptionManager::captionGenerated, this, &MainWindow::updateCaptionWithSuggestion);
     connect(m_autoCaptionManager, &AutoCaptionManager::errorOccurred, this, &MainWindow::handleAutoCaptionError);
+    connect(m_autoCaptionManager, &AutoCaptionManager::modelStatusChanged, this, &MainWindow::handleModelStatusChanged); 
+    connect(m_autoCaptionManager, &AutoCaptionManager::vocabularyReady, this, [this](const QStringList &vocabularyWithUnderscores){ 
+        if (m_tagEditorWidget && !vocabularyWithUnderscores.isEmpty()) {
+            m_tagEditorWidget->setKnownTagsVocabulary(vocabularyWithUnderscores);
+            qDebug() << "MainWindow: Vocabulary set for TagEditorWidget via vocabularyReady signal:" << vocabularyWithUnderscores.size() << "tags.";
+        } else {
+            qDebug() << "MainWindow: vocabularyReady signal received, but vocab empty or tagEditorWidget null.";
+        }
+    });
     
     if (m_autoCaptionSettingsPanel) { 
         connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::loadModelClicked, m_autoCaptionManager, &AutoCaptionManager::loadModel);
@@ -145,30 +167,15 @@ MainWindow::MainWindow(QWidget *parent)
         connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::useAmdGpuChanged, m_autoCaptionManager, &AutoCaptionManager::setUseAmdGpu);
         connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::advancedSettingsClicked, this, &MainWindow::showAutoCaptionSettingsDialog);
         connect(m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::enableSuggestionWhileTypingChanged, m_autoCaptionManager, &AutoCaptionManager::setEnableSuggestionWhileTyping);
-        connect(m_autoCaptionManager, &AutoCaptionManager::modelStatusChanged, 
-                m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::setModelStatus);
-        // New connections for download progress
         connect(m_autoCaptionManager, &AutoCaptionManager::downloadProgress,
                 m_autoCaptionSettingsPanel, &AutoCaptionSettingsPanel::showDownloadProgress);
-        // We can use modelStatusChanged for overall download status updates from AutoCaptionManager
-        // For example, AutoCaptionManager can emit modelStatusChanged("Download failed for X", "red")
-        // or modelStatusChanged("Download complete. Loading...", "yellow")
-        // AutoCaptionSettingsPanel::setModelStatus will then hide the progress bar if color is not "blue".
     }
     
     if (m_nlpModeRadioMain) {
-        connect(m_nlpModeRadioMain, &QRadioButton::toggled, this, [this](bool checked){
-            if (checked && m_autoCaptionManager) {
-                qDebug() << "MainWindow: NLP Mode selected";
-            }
-        });
+        connect(m_nlpModeRadioMain, &QRadioButton::toggled, this, &MainWindow::onCaptionEditingModeChanged);
     }
     if (m_tagsModeRadioMain) {
-         connect(m_tagsModeRadioMain, &QRadioButton::toggled, this, [this](bool checked){
-            if (checked && m_autoCaptionManager) {
-                qDebug() << "MainWindow: Tags Mode selected";
-            }
-        });
+         connect(m_tagsModeRadioMain, &QRadioButton::toggled, this, &MainWindow::onCaptionEditingModeChanged);
     }
 
     connect(mediaPlayer, &QMediaPlayer::durationChanged, this, [this](qint64 duration){
@@ -197,7 +204,7 @@ MainWindow::MainWindow(QWidget *parent)
     
     autoSaveTimer = new QTimer(this);
     connect(autoSaveTimer, &QTimer::timeout, this, &MainWindow::performAutoSave);
-    autoSaveTimer->start(30 * 60 * 1000); // Reverted to 30 minutes
+    autoSaveTimer->start(30 * 60 * 1000); 
 
     statusBar()->showMessage(tr("Ready. Please open a directory."));
     if (m_sparkleActionButton) {
@@ -205,9 +212,16 @@ MainWindow::MainWindow(QWidget *parent)
         m_fabOpacityEffect->setOpacity(1.0); 
         m_fabAutoHideTimer->start(); 
     }
+    onCaptionEditingModeChanged(); 
+    if (m_autoCaptionManager) {
+        m_autoCaptionManager->ensureVocabularyLoaded(); 
+    }
 }
 
-MainWindow::~MainWindow() {}
+MainWindow::~MainWindow() {
+    QSettings settings("KetenganDiffusion", "HaigakuManager");
+    settings.setValue("storeManualTagsWithUnderscores", m_storeManualTagsWithUnderscores);
+}
 
 void MainWindow::setupUI()
 {
@@ -268,14 +282,14 @@ void MainWindow::setupUI()
     QHBoxLayout* captionHeaderLayout = new QHBoxLayout();
     m_nlpModeRadioMain = new QRadioButton(tr("NLP"), rightPanelContainer);
     m_tagsModeRadioMain = new QRadioButton(tr("Tags"), rightPanelContainer);
-    m_nlpModeRadioMain->setChecked(true);
+    m_nlpModeRadioMain->setChecked(true); 
     QHBoxLayout *nlpTagsLayout = new QHBoxLayout(); 
     nlpTagsLayout->addWidget(m_nlpModeRadioMain);
     nlpTagsLayout->addWidget(m_tagsModeRadioMain);
     nlpTagsLayout->setContentsMargins(0,0,0,0); 
-    QButtonGroup *mainCaptionModeGroup = new QButtonGroup(this);
-    mainCaptionModeGroup->addButton(m_nlpModeRadioMain);
-    mainCaptionModeGroup->addButton(m_tagsModeRadioMain);
+    m_captionModeSwitchGroup = new QButtonGroup(this); 
+    m_captionModeSwitchGroup->addButton(m_nlpModeRadioMain);
+    m_captionModeSwitchGroup->addButton(m_tagsModeRadioMain);
     captionHeaderLayout->addLayout(nlpTagsLayout); 
     captionHeaderLayout->addStretch(); 
     m_bulbButton = new QToolButton(rightPanelContainer);
@@ -285,16 +299,32 @@ void MainWindow::setupUI()
     captionHeaderLayout->addWidget(m_bulbButton);
     rightPanelVLayout->addLayout(captionHeaderLayout);
 
-    captionEditor = new QTextEdit(rightPanelContainer); 
-    captionEditor->setPlaceholderText(tr("Caption will appear here..."));
+    m_captionInputStackedWidget = new QStackedWidget(rightPanelContainer);
+    captionEditor = new QTextEdit(m_captionInputStackedWidget); 
+    captionEditor->setPlaceholderText(tr("NLP caption will appear here..."));
     captionEditor->installEventFilter(this); 
     connect(captionEditor, &QTextEdit::textChanged, this, [this]() { 
         captionChangedSinceLoad = true; 
         if (currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
-            if(captionEditor) unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
+            if(captionEditor && m_nlpModeRadioMain->isChecked()) unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
         }
     });
-    rightPanelVLayout->addWidget(captionEditor, 1); 
+    m_captionInputStackedWidget->addWidget(captionEditor);
+
+    m_tagEditorWidget = new TagEditorWidget(m_captionInputStackedWidget);
+    connect(m_tagEditorWidget, &TagEditorWidget::tagsChanged, this, [this]() {
+        captionChangedSinceLoad = true;
+        if (currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
+            if(m_tagsModeRadioMain->isChecked()) {
+                // For unsavedCaptions, always store with spaces for internal consistency
+                unsavedCaptions[mediaFiles.at(currentMediaIndex)] = m_tagEditorWidget->getTags(false).join(", ");
+            }
+        }
+    });
+    m_captionInputStackedWidget->addWidget(m_tagEditorWidget);
+    
+    rightPanelVLayout->addWidget(m_captionInputStackedWidget, 1); 
+
     fileDetailsLabel = new QLabel(tr("File details will appear here..."), rightPanelContainer); 
     fileDetailsLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft); fileDetailsLabel->setWordWrap(true);
     fileDetailsLabel->setFixedHeight(fileDetailsLabel->sizeHint().height() * 3); 
@@ -323,6 +353,42 @@ void MainWindow::setupUI()
     m_autoCaptionSettingsPanel->setVisible(false);
     m_isAutoCaptionPanelVisible = false;
 }
+
+void MainWindow::onCaptionEditingModeChanged() {
+    if (!m_captionInputStackedWidget || !captionEditor || !m_tagEditorWidget || !m_nlpModeRadioMain || !m_tagsModeRadioMain) {
+        return;
+    }
+    
+    QString currentTextToStore;
+    QWidget* previousEditor = m_captionInputStackedWidget->currentWidget();
+    if (previousEditor == captionEditor) {
+        currentTextToStore = captionEditor->toPlainText();
+    } else if (previousEditor == m_tagEditorWidget) {
+        // When switching modes, get tags with spaces for consistency
+        currentTextToStore = m_tagEditorWidget->getTags(false).join(", ");
+    }
+
+    if (m_nlpModeRadioMain->isChecked()) {
+        if (m_captionInputStackedWidget->currentWidget() != captionEditor) {
+             QStringList tags = currentTextToStore.split(',', Qt::SkipEmptyParts);
+             QStringList cleanedTags;
+             for(const QString &tag : tags) cleanedTags.append(tag.trimmed());
+             captionEditor->setPlainText(cleanedTags.join(", "));
+        }
+        m_captionInputStackedWidget->setCurrentWidget(captionEditor);
+        captionEditor->setPlaceholderText(tr("NLP caption will appear here..."));
+    } else if (m_tagsModeRadioMain->isChecked()) {
+        if (m_captionInputStackedWidget->currentWidget() != m_tagEditorWidget) {
+            QStringList tags = currentTextToStore.split(',', Qt::SkipEmptyParts);
+            QStringList cleanedTags;
+            for(const QString &tag : tags) cleanedTags.append(tag.trimmed());
+            // When setting tags from NLP to Tags mode, assume input has spaces (no underscores)
+            m_tagEditorWidget->setTags(cleanedTags, false); 
+        }
+        m_captionInputStackedWidget->setCurrentWidget(m_tagEditorWidget);
+    }
+}
+
 
 void MainWindow::toggleAutoCaptionPanel() {
     if (!m_autoCaptionSettingsPanel || !m_sparkleActionButton || !m_fabOpacityEffect || !m_fabFadeAnimation) return;
@@ -420,23 +486,16 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
                 return false; 
         }
         return false; 
-    } else if (watched == captionEditor) {
+    } else if (watched == captionEditor) { 
         if (event->type() == QEvent::KeyPress) {
             QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
-            if (keyEvent->key() == Qt::Key_Tab && !m_suggestedCaption.isEmpty()) {
-                qDebug() << "Tab pressed in captionEditor. m_suggestedCaption:" << m_suggestedCaption;
-                qDebug() << "Editor text before:" << captionEditor->toPlainText();
-                qDebug() << "Editor placeholder before:" << captionEditor->placeholderText();
-
+            if (keyEvent->key() == Qt::Key_Tab && !m_suggestedCaption.isEmpty() && m_nlpModeRadioMain->isChecked()) {
+                qDebug() << "Tab pressed in captionEditor (NLP mode). m_suggestedCaption:" << m_suggestedCaption;
                 captionEditor->setPlainText(m_suggestedCaption);
                 captionEditor->setPlaceholderText(""); 
-                
-                qDebug() << "Editor text after:" << captionEditor->toPlainText();
-
                 QTextCursor cursor = captionEditor->textCursor();
                 cursor.movePosition(QTextCursor::End);
                 captionEditor->setTextCursor(cursor);
-                
                 m_suggestedCaption.clear();
                 captionChangedSinceLoad = true;
                 return true; 
@@ -463,7 +522,7 @@ void MainWindow::updateCaptionWithSuggestion(const QStringList &tags, const QStr
     }
     m_suggestedCaption = tags.join(", "); 
     
-    if (captionEditor) {
+    if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor) {
         if (autoFill) { 
             captionEditor->setPlainText(m_suggestedCaption);
             captionEditor->setPlaceholderText(""); 
@@ -471,12 +530,19 @@ void MainWindow::updateCaptionWithSuggestion(const QStringList &tags, const QStr
             if (captionEditor->toPlainText().isEmpty()) {
                 captionEditor->setPlaceholderText(m_suggestedCaption); 
             }
-            
             if (!m_suggestedCaption.isEmpty()) {
                 QPoint tipPos = captionEditor->mapToGlobal(QPoint(0, captionEditor->height() / 2));
                 QToolTip::showText(tipPos, tr("Suggestion available. Press Tab to apply."), captionEditor, captionEditor->rect(), 3000);
                 statusBar()->showMessage(tr("Suggestion available. Press Tab to apply."), 5000);
             }
+        }
+    } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+        if (autoFill) {
+            QStringList newTags = m_suggestedCaption.split(',', Qt::SkipEmptyParts);
+            for(QString &tag : newTags) tag = tag.trimmed();
+            m_tagEditorWidget->setTags(newTags, true); 
+        } else {
+            statusBar()->showMessage(tr("Tags generated by model. Type to see suggestions."), 3000);
         }
     }
     qDebug() << "Suggestion received:" << m_suggestedCaption << "AutoFill:" << autoFill;
@@ -491,16 +557,37 @@ void MainWindow::showAutoCaptionSettingsDialog() {
     if (!m_autoCaptionManager || !m_autoCaptionSettingsPanel) return;
     QString currentModel = "SmilingWolf/wd-vit-tagger-v3"; 
     QVariantMap currentSettings = m_autoCaptionManager->getModelSettings(); 
+    // Ensure current preference for storeManualTagsWithUnderscores is passed to dialog
+    currentSettings["store_manual_tags_with_underscores"] = m_storeManualTagsWithUnderscores;
     
     AutoCaptionSettingsDialog dialog(currentModel, currentSettings, this);
     if (dialog.exec() == QDialog::Accepted) {
-        m_autoCaptionManager->applyModelSettings(currentModel, dialog.getSettings());
+        QVariantMap newSettings = dialog.getSettings();
+        m_autoCaptionManager->applyModelSettings(currentModel, newSettings);
+        
+        m_storeManualTagsWithUnderscores = newSettings.value("store_manual_tags_with_underscores", false).toBool();
+        if (m_tagEditorWidget) {
+            m_tagEditorWidget->setStoreTagsWithUnderscores(m_storeManualTagsWithUnderscores); 
+        }
+        qDebug() << "MainWindow: Store manual tags with underscores set to:" << m_storeManualTagsWithUnderscores;
+        
+        QSettings appSettings("KetenganDiffusion", "HaigakuManager");
+        appSettings.setValue("storeManualTagsWithUnderscores", m_storeManualTagsWithUnderscores);
     }
 }
 
 void MainWindow::onThumbnailViewClicked(const QModelIndex &index) { 
     if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
-        if(captionEditor) unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
+        QString currentCaptionText;
+        if (m_nlpModeRadioMain->isChecked() && captionEditor) {
+            currentCaptionText = captionEditor->toPlainText();
+        } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+            // Always get with spaces for unsavedCaptions
+            currentCaptionText = m_tagEditorWidget->getTags(false).join(", ");
+        }
+        if (!currentCaptionText.isEmpty() || unsavedCaptions.contains(mediaFiles.at(currentMediaIndex))) {
+             unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
+        }
     }
     displayMediaAtIndex(index.row());
 }
@@ -552,9 +639,9 @@ void MainWindow::createMenus() {
     fileMenu->addAction(saveProjectAsAction);
     
     fileMenu->addSeparator();
-    QAction *saveCaptionAction = new QAction(tr("Save &Caption (current file)"), this); 
-    connect(saveCaptionAction, &QAction::triggered, this, &MainWindow::saveCurrentCaption);
-    fileMenu->addAction(saveCaptionAction);
+    QAction *saveIndividualCaptionAction = new QAction(tr("Save &Caption (current file)"), this); 
+    connect(saveIndividualCaptionAction, &QAction::triggered, this, &MainWindow::saveCurrentCaption);
+    fileMenu->addAction(saveIndividualCaptionAction);
     fileMenu->addSeparator();
     QAction *nextAction = new QAction(tr("&Next Media"), this);
     connect(nextAction, &QAction::triggered, this, &MainWindow::nextMedia);
@@ -590,8 +677,17 @@ void MainWindow::createStatusBar() {
 }
 void MainWindow::openDirectory() { 
     if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
-         if(captionEditor) unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
+        QString currentCaptionText;
+        if (m_nlpModeRadioMain->isChecked() && captionEditor) {
+            currentCaptionText = captionEditor->toPlainText();
+        } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+            currentCaptionText = m_tagEditorWidget->getTags(false).join(", "); // Always spaces for unsaved
+        }
+         if (!currentCaptionText.isEmpty() || unsavedCaptions.contains(mediaFiles.at(currentMediaIndex))) {
+            unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
+        }
     }
+
     QString dirPath = QFileDialog::getExistingDirectory(this, tr("Open Directory"),
                                                        currentDirectory.isEmpty() ? QDir::homePath() : currentDirectory,
                                                        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
@@ -621,7 +717,10 @@ void MainWindow::loadFiles(const QString &dirPath)
         if(mediaDisplayContainer && imageScrollArea) mediaDisplayContainer->setCurrentWidget(imageScrollArea);
         if(imageDisplayLabel) { imageDisplayLabel->clear(); imageDisplayLabel->setText(tr("No media files found in directory."));}
         if(videoControlsWidget) videoControlsWidget->setVisible(false);
-        if(captionEditor) captionEditor->clear();
+        
+        if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor) captionEditor->clear();
+        else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) m_tagEditorWidget->clear();
+        
         if(fileDetailsLabel) fileDetailsLabel->setText(tr("File details will appear here..."));
         return;
     }
@@ -642,11 +741,6 @@ void MainWindow::loadFiles(const QString &dirPath)
     statusBar()->showMessage(tr("Loaded %1 media files. Thumbnails loading on demand...").arg(mediaFiles.count()));
 }
 void MainWindow::displayMediaAtIndex(int index) { 
-    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
-        if (captionEditor) { 
-             unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
-        }
-    }
     if (index < 0 || index >= mediaFiles.count()) { 
         qWarning() << "displayMediaAtIndex: Index out of bounds" << index;
         return;
@@ -709,7 +803,6 @@ void MainWindow::updateFileDetails(const QString &filePath) {
     if(fileDetailsLabel) fileDetailsLabel->setText(detailsText);
 }
 void MainWindow::loadCaptionForCurrentImage() { 
-    if(captionEditor) captionEditor->blockSignals(true); 
     QString captionToLoad = "";
     if (currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
         QString mediaPath = mediaFiles.at(currentMediaIndex);
@@ -734,15 +827,39 @@ void MainWindow::loadCaptionForCurrentImage() {
             }
         }
     }
-    if(captionEditor) captionEditor->setPlainText(captionToLoad);
-    if(captionEditor) captionEditor->blockSignals(false);
+
+    if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor) {
+        captionEditor->blockSignals(true);
+        captionEditor->setPlainText(captionToLoad);
+        captionEditor->blockSignals(false);
+    } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+        QStringList tags = captionToLoad.split(',', Qt::SkipEmptyParts);
+        QStringList cleanedTags;
+        for(const QString &tag : tags) {
+            cleanedTags.append(tag.trimmed());
+        }
+        // When loading from file, assume tags might have underscores if that was the save format.
+        // However, TagEditorWidget internally wants tags with spaces.
+        // The `inputHasUnderscores` parameter of `setTags` is tricky.
+        // For now, assume loaded captions are space-separated for simplicity,
+        // unless we store metadata about their format.
+        m_tagEditorWidget->setTags(cleanedTags, false); 
+    }
     captionChangedSinceLoad = false; 
 }
 void MainWindow::saveCurrentCaption()  { 
     if (currentMediaIndex < 0 || currentMediaIndex >= mediaFiles.count()) return;
+    
     QString captionTextToSave;
-    if (captionEditor) captionTextToSave = captionEditor->toPlainText();
-    else return; 
+    if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor) {
+        captionTextToSave = captionEditor->toPlainText();
+    } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+        // Use the member variable m_storeManualTagsWithUnderscores to determine format for saving
+        captionTextToSave = m_tagEditorWidget->getTags(m_storeManualTagsWithUnderscores).join(", ");
+    } else {
+        return;
+    }
+        
     QString mediaPath = mediaFiles.at(currentMediaIndex);
     QFileInfo mediaInfo(mediaPath);
     QString captionPath = mediaInfo.absolutePath() + "/" + mediaInfo.completeBaseName() + ".txt";
@@ -761,7 +878,8 @@ void MainWindow::saveCurrentCaption()  {
     }
 }
 void MainWindow::applyScoreToCaption(int scoreValue)  { 
-    if (currentMediaIndex < 0 || currentMediaIndex >= mediaFiles.count() || !captionEditor) return;
+    if (currentMediaIndex < 0 || currentMediaIndex >= mediaFiles.count()) return;
+    
     QString scoreWord;
     if (scoreValue >= 1 && scoreValue <= 3) scoreWord = "Worst";
     else if (scoreValue == 4) scoreWord = "Lousy";
@@ -771,25 +889,47 @@ void MainWindow::applyScoreToCaption(int scoreValue)  {
     else if (scoreValue == 8) scoreWord = "Exceptional";
     else if (scoreValue == 9) scoreWord = "Iconic";
     else return;
-    QString currentCaption = captionEditor->toPlainText();
-    QStringList parts = currentCaption.split(',', Qt::SkipEmptyParts);
-    QStringList existingScores = {"Worst", "Lousy", "adequate", "Superior", "Masterpiece", "Exceptional", "Iconic"};
-    if (!parts.isEmpty()) {
-        QString firstPartTrimmed = parts.first().trimmed();
-        if (existingScores.contains(firstPartTrimmed, Qt::CaseInsensitive)) {
-            parts.removeFirst();
+
+    if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor) {
+        QString currentCaption = captionEditor->toPlainText();
+        QStringList parts = currentCaption.split(',', Qt::SkipEmptyParts);
+        QStringList existingScores = {"Worst", "Lousy", "adequate", "Superior", "Masterpiece", "Exceptional", "Iconic"};
+        if (!parts.isEmpty()) {
+            QString firstPartTrimmed = parts.first().trimmed();
+            if (existingScores.contains(firstPartTrimmed, Qt::CaseInsensitive)) {
+                parts.removeFirst();
+            }
         }
+        parts.prepend(scoreWord);
+        for(int i = 0; i < parts.size(); ++i) parts[i] = parts[i].trimmed();
+        captionEditor->setPlainText(parts.join(", "));
+    } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+        QStringList currentTags = m_tagEditorWidget->getTags(false); // Get with spaces for manipulation
+        
+        QString scoreWordForDisplay = scoreWord; 
+        
+        QStringList existingScoresDisplay = {"Worst", "Lousy", "adequate", "Superior", "Masterpiece", "Exceptional", "Iconic"};
+        
+        for(const QString& es : existingScoresDisplay) { // Iterate and remove all existing scores
+            currentTags.removeAll(es);
+        }
+        
+        currentTags.prepend(scoreWordForDisplay);
+        m_tagEditorWidget->setTags(currentTags, false); 
     }
-    parts.prepend(scoreWord);
-    for(int i = 0; i < parts.size(); ++i) parts[i] = parts[i].trimmed();
-    captionEditor->setPlainText(parts.join(", "));
 }
 void MainWindow::keyPressEvent(QKeyEvent *event) { 
-    // Tab handling is now in eventFilter for captionEditor
-    // if (captionEditor && captionEditor->hasFocus()) {
-    //     QMainWindow::keyPressEvent(event); // Let base handle other keys for editor
-    //     return;
-    // }
+    bool editorHasFocus = false;
+    if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor && captionEditor->hasFocus()){
+        editorHasFocus = true;
+    } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget ){ 
+        if (m_captionInputStackedWidget && m_captionInputStackedWidget->currentWidget() == m_tagEditorWidget) {
+             if (m_tagEditorWidget->hasFocus() || (m_tagEditorWidget->focusWidget() && m_tagEditorWidget->focusWidget()->inherits("QLineEdit"))) {
+                 editorHasFocus = true;
+             }
+        }
+    }
+
     switch (event->key()) {
     case Qt::Key_S: saveCurrentCaption(); nextMedia(); break;
     case Qt::Key_Right: nextMedia(); break;
@@ -797,7 +937,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event) {
     case Qt::Key_Delete: deleteCurrentMediaItem(); break;
     case Qt::Key_1: case Qt::Key_2: case Qt::Key_3: case Qt::Key_4: case Qt::Key_5: 
     case Qt::Key_6: case Qt::Key_7: case Qt::Key_8: case Qt::Key_9:
-        if (!(captionEditor && captionEditor->hasFocus())) { 
+        if (!editorHasFocus) { 
              applyScoreToCaption(event->key() - Qt::Key_0); 
              saveCurrentCaption(); 
              nextMedia();
@@ -828,17 +968,21 @@ void MainWindow::performAutoSave() {
     qDebug() << "Performing auto-save...";
     bool projectSaved = false;
     if (!m_currentProjectPath.isEmpty() && !currentDirectory.isEmpty()) {
-        // Save the project file
         QSettings projectFile(m_currentProjectPath, QSettings::IniFormat);
         projectFile.setValue("Project/DirectoryPath", currentDirectory);
-
         projectFile.beginGroup("Captions");
         projectFile.remove(""); 
-
         QDir dir(currentDirectory);
-        // First, ensure the current editor's content is in unsavedCaptions if it's dirty
-        if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count() && captionEditor) {
-            unsavedCaptions[mediaFiles.at(currentMediaIndex)] = captionEditor->toPlainText();
+        
+        if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
+            QString currentCaptionText;
+             if (m_nlpModeRadioMain->isChecked() && captionEditor) {
+                currentCaptionText = captionEditor->toPlainText();
+            } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+                // For unsavedCaptions, always store with spaces
+                currentCaptionText = m_tagEditorWidget->getTags(false).join(", ");
+            }
+            unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
         }
 
         for (auto it = unsavedCaptions.constBegin(); it != unsavedCaptions.constEnd(); ++it) {
@@ -853,19 +997,10 @@ void MainWindow::performAutoSave() {
         projectFile.endGroup();
         projectFile.sync();
         projectSaved = true;
-        // Note: We don't clear captionChangedSinceLoad or unsavedCaptions here,
-        // as this is an auto-save. The "dirty" state relative to manual save actions remains.
     }
-
-    // The original logic for saving individual .txt files can be kept or removed
-    // depending on whether .hmproj is the sole source of truth for captions when a project is open.
-    // For now, let's assume .hmproj is primary, and individual .txt save is secondary or for non-project mode.
-    // If a project is open, the .hmproj save above should cover the unsaved captions.
-    // If no project is open, the old logic might still be desired.
-    // Let's refine: only do individual .txt saves if NO project is open.
     
     int individualCaptionsSaved = 0;
-    if (m_currentProjectPath.isEmpty()) { // Only save individual .txt if not in project mode
+    if (m_currentProjectPath.isEmpty()) { 
         QStringList keysToSave = unsavedCaptions.keys();
         for (const QString &filePathToSave : keysToSave) {
             if (!mediaFiles.contains(filePathToSave)) continue; 
@@ -875,10 +1010,6 @@ void MainWindow::performAutoSave() {
             QFile captionFile(captionPath);
             if (captionFile.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
                 QTextStream out(&captionFile); out << captionText; captionFile.close();
-                // If not in project mode, saving a .txt means it's no longer "unsaved" in this session for that file
-                // However, unsavedCaptions is also used by project saving. This interaction needs care.
-                // For simplicity of auto-save, let's not remove from unsavedCaptions here.
-                // Manual "Save Caption" does remove it.
                 individualCaptionsSaved++;
             } else {
                 qWarning() << "Auto-save (individual .txt) failed for" << captionPath;
@@ -928,7 +1059,8 @@ void MainWindow::deleteCurrentMediaItem() {
         if(imageDisplayLabel) imageDisplayLabel->clear();
         if(videoDisplayWidget && mediaPlayer) mediaPlayer->setSource(QUrl()); 
         if(videoControlsWidget) videoControlsWidget->setVisible(false);
-        if(captionEditor) captionEditor->clear();
+        if (captionEditor) captionEditor->clear();
+        if (m_tagEditorWidget) m_tagEditorWidget->clear();
         if(fileDetailsLabel) fileDetailsLabel->setText(tr("File details will appear here..."));
         statusBar()->showMessage(tr("All media deleted or directory empty."), 3000);
     } else {
@@ -1039,6 +1171,17 @@ void MainWindow::saveProjectAs()
     projectFile.remove(""); 
 
     QDir dir(currentDirectory);
+    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
+        QString currentCaptionText;
+            if (m_nlpModeRadioMain->isChecked() && captionEditor) {
+            currentCaptionText = captionEditor->toPlainText();
+        } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+            // Use the member variable m_storeManualTagsWithUnderscores
+            currentCaptionText = m_tagEditorWidget->getTags(m_storeManualTagsWithUnderscores).join(", ");
+        }
+        unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
+    }
+
     for (auto it = unsavedCaptions.constBegin(); it != unsavedCaptions.constEnd(); ++it) {
         QString absoluteFilePath = it.key();
         QString relativeFilePath = dir.relativeFilePath(absoluteFilePath);
@@ -1049,14 +1192,6 @@ void MainWindow::saveProjectAs()
         }
     }
     
-    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count() && captionEditor) {
-         QString absPath = mediaFiles.at(currentMediaIndex);
-         QString relPath = dir.relativeFilePath(absPath);
-         if (!relPath.isEmpty()) {
-            projectFile.setValue(relPath, captionEditor->toPlainText());
-         }
-    }
-
     projectFile.endGroup();
     projectFile.sync(); 
 
@@ -1082,6 +1217,17 @@ void MainWindow::saveProject()
     projectFile.remove(""); 
 
     QDir dir(currentDirectory);
+    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
+        QString currentCaptionText;
+            if (m_nlpModeRadioMain->isChecked() && captionEditor) {
+            currentCaptionText = captionEditor->toPlainText();
+        } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
+            // Use the member variable m_storeManualTagsWithUnderscores
+            currentCaptionText = m_tagEditorWidget->getTags(m_storeManualTagsWithUnderscores).join(", ");
+        }
+        unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
+    }
+
     for (auto it = unsavedCaptions.constBegin(); it != unsavedCaptions.constEnd(); ++it) {
         QString absoluteFilePath = it.key();
         QString relativeFilePath = dir.relativeFilePath(absoluteFilePath);
@@ -1090,13 +1236,6 @@ void MainWindow::saveProject()
         } else {
             qWarning() << "Could not make file path relative for project save:" << absoluteFilePath;
         }
-    }
-    if (captionChangedSinceLoad && currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count() && captionEditor) {
-         QString absPath = mediaFiles.at(currentMediaIndex);
-         QString relPath = dir.relativeFilePath(absPath);
-         if (!relPath.isEmpty()) {
-            projectFile.setValue(relPath, captionEditor->toPlainText());
-         }
     }
     projectFile.endGroup();
     projectFile.sync();
@@ -1128,6 +1267,8 @@ void MainWindow::openProject()
     
     unsavedCaptions.clear(); 
     if(captionEditor) captionEditor->clear();
+    if(m_tagEditorWidget) m_tagEditorWidget->clear();
+
 
     statusBar()->showMessage(tr("Opening project: %1...").arg(QFileInfo(m_currentProjectPath).fileName()));
     QCoreApplication::processEvents(); 
@@ -1139,7 +1280,16 @@ void MainWindow::openProject()
     QDir dir(currentDirectory);
     for (const QString &relativeFilePath : relativeFilePaths) {
         QString absoluteFilePath = dir.filePath(relativeFilePath);
-        unsavedCaptions[absoluteFilePath] = projectFile.value(relativeFilePath).toString();
+        // When loading from project, assume tags are stored in the format dictated by m_storeManualTagsWithUnderscores
+        // For TagEditorWidget, we always want to set them with spaces.
+        // So, if they were stored with underscores, convert them back.
+        QString captionFromFile = projectFile.value(relativeFilePath).toString();
+        if (m_storeManualTagsWithUnderscores) { // If they were stored with underscores
+            // This logic is imperfect if the project was saved with a different setting than current.
+            // A better project format would store the setting itself or always store with spaces.
+            // For now, assume if m_storeManualTagsWithUnderscores is true, the file *might* have them.
+        }
+        unsavedCaptions[absoluteFilePath] = captionFromFile; // Store as is from file for now
     }
     projectFile.endGroup();
 
@@ -1151,4 +1301,21 @@ void MainWindow::openProject()
 
     setWindowTitle(tr("Haigaku Manager - %1").arg(QFileInfo(m_currentProjectPath).fileName()));
     statusBar()->showMessage(tr("Project %1 opened.").arg(QFileInfo(m_currentProjectPath).fileName()), 5000);
+}
+
+void MainWindow::handleModelStatusChanged(const QString &status, const QString &color)
+{
+    qDebug() << "MainWindow::handleModelStatusChanged - Status:" << status << "Color:" << color;
+    if (m_autoCaptionSettingsPanel) { 
+        m_autoCaptionSettingsPanel->setModelStatus(status, color);
+    }
+    if (color == "green" && m_autoCaptionManager && m_tagEditorWidget) { 
+        QStringList vocabWithUnderscores = m_autoCaptionManager->getVocabularyForCompletions();
+        if (!vocabWithUnderscores.isEmpty()) {
+            m_tagEditorWidget->setKnownTagsVocabulary(vocabWithUnderscores);
+            qDebug() << "Tag vocabulary set for TagEditorWidget:" << vocabWithUnderscores.size() << "tags. First 5:" << vocabWithUnderscores.mid(0,5);
+        } else {
+            qDebug() << "Failed to get vocabulary or vocabulary is empty after model load (handleModelStatusChanged).";
+        }
+    }
 }

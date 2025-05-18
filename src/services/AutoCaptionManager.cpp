@@ -25,10 +25,11 @@ AutoCaptionManager::AutoCaptionManager(QObject *parent)
     m_modelLoadWatcher = new QFutureWatcher<QPair<bool, QString>>(this); 
     m_modelSettings["remove_separator"] = true; 
     connect(m_modelLoadWatcher, &QFutureWatcher<QPair<bool, QString>>::finished, this, &AutoCaptionManager::handleModelLoadFinished);
-    connect(this, &AutoCaptionManager::allDownloadsCompleted, this, &AutoCaptionManager::onAllDownloadsCompleted);
+    connect(this, &AutoCaptionManager::allDownloadsCompleted, this, &AutoCaptionManager::onAllDownloadsCompleted); // For full model load
     
     qDebug() << "AutoCaptionManager created.";
     emit modelStatusChanged(tr("Model: Unloaded"), "red");
+    ensureVocabularyLoaded(); // Attempt to load/download vocabulary at startup
 }
 
 AutoCaptionManager::~AutoCaptionManager()
@@ -171,6 +172,7 @@ void AutoCaptionManager::onDownloadFinished() {
 
     bool success = false;
     QString errorString;
+    QString downloadedFilePath = m_downloadedFile ? m_downloadedFile->fileName() : ""; // Store before m_downloadedFile is deleted
 
     // Check for redirection
     QUrl redirectUrl = m_currentReply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
@@ -213,15 +215,27 @@ void AutoCaptionManager::onDownloadFinished() {
         }
     }
 
-    delete m_downloadedFile; // m_downloadedFile is now closed or removed
+    delete m_downloadedFile; 
     m_downloadedFile = nullptr;
     
+    QString justDownloadedFileName = m_currentDownloadingFileNameForUI; // Copy before it's potentially changed by next download
+
     m_currentReply->deleteLater();
     m_currentReply = nullptr;
 
-    emit downloadComplete(m_currentDownloadingFileNameForUI, success, errorString);
+    emit downloadComplete(justDownloadedFileName, success, errorString);
 
     if (success) {
+        if (justDownloadedFileName == "selected_tags.csv" && m_taggerEngine && !m_taggerEngine->isVocabularyLoaded()) {
+            if (!downloadedFilePath.isEmpty()) {
+                qDebug() << "Attempting to load vocabulary from just downloaded CSV:" << downloadedFilePath;
+                if (m_taggerEngine->loadTagVocabulary(downloadedFilePath)) {
+                    emit vocabularyReady(m_taggerEngine->getKnownTags());
+                } else {
+                    emit errorOccurred(tr("Failed to load downloaded vocabulary file: %1").arg(downloadedFilePath));
+                }
+            }
+        }
         processNextDownload(); // Try next file in queue
     } else {
         m_downloadQueue.clear(); // Stop queue on error
@@ -411,3 +425,92 @@ QVariantMap AutoCaptionManager::getModelSettings() const
 {
     return m_modelSettings;
 }
+
+QStringList AutoCaptionManager::getVocabularyForCompletions() const
+{
+    if (m_taggerEngine && m_taggerEngine->isVocabularyLoaded()) { // Check if vocab is loaded
+        QStringList tags = m_taggerEngine->getKnownTags();
+        qDebug() << "AutoCaptionManager::getVocabularyForCompletions returning" << tags.size() << "tags. First few:" << tags.mid(0, 5);
+        return tags;
+    }
+    qDebug() << "AutoCaptionManager::getVocabularyForCompletions: Vocabulary not ready.";
+    return QStringList();
+}
+
+void AutoCaptionManager::ensureVocabularyLoaded(const QString &modelName) {
+    if (!m_taggerEngine) {
+        m_taggerEngine = new WdVIT_TaggerEngine();
+    }
+    if (m_taggerEngine->isVocabularyLoaded()) {
+        qDebug() << "Vocabulary already loaded for TagEditor.";
+        emit vocabularyReady(m_taggerEngine->getKnownTags());
+        return;
+    }
+
+    QString appDirPath = QCoreApplication::applicationDirPath();
+    QString modelBasePath = QDir(appDirPath).filePath("models/" + modelName);
+    QString csvPath = QDir(modelBasePath).filePath("selected_tags.csv");
+    QFileInfo csvFileInfo(csvPath);
+
+    if (csvFileInfo.exists()) {
+        qDebug() << "selected_tags.csv found locally for" << modelName;
+        if (m_taggerEngine->loadTagVocabulary(csvPath)) {
+            emit vocabularyReady(m_taggerEngine->getKnownTags());
+        } else {
+            emit errorOccurred(tr("Failed to load existing vocabulary file: %1").arg(csvPath));
+        }
+    } else {
+        qDebug() << "selected_tags.csv not found locally for" << modelName << ". Queuing download.";
+        emit modelStatusChanged(tr("Vocabulary for %1 not found. Downloading...").arg(modelName), "orange");
+        
+        QDir modelDir(modelBasePath);
+        if (!modelDir.exists()) {
+            if (!modelDir.mkpath(".")) {
+                emit errorOccurred(tr("Could not create model directory: %1").arg(modelDir.path()));
+                return;
+            }
+        }
+        
+        // Add only CSV to download queue for this specific function
+        // Ensure m_downloadQueue is managed carefully if other downloads might be pending.
+        // For simplicity, this assumes ensureVocabularyLoaded is called when queue is clear or for a new purpose.
+        // A more robust queue would handle different types of download requests.
+        m_downloadQueue.clear(); // Clear queue for this specific vocabulary download
+        m_modelNameToLoadAfterDownload = modelName; // Store context
+
+        if (modelName == "SmilingWolf/wd-vit-tagger-v3") {
+             m_downloadQueue.append({QUrl("https://huggingface.co/SmilingWolf/wd-vit-tagger-v3/resolve/main/selected_tags.csv?download=true"), csvPath});
+        } else {
+            emit errorOccurred(tr("Download URLs not defined for vocabulary of model: %1").arg(modelName));
+            return;
+        }
+        processNextDownload(); // This will download selected_tags.csv
+                               // onDownloadFinished needs to check if it was selected_tags.csv and then emit vocabularyReady
+    }
+}
+
+// In onDownloadFinished, after successful download of a file:
+// if (m_currentDownloadingFileNameForUI == "selected_tags.csv") {
+//     if (m_taggerEngine->loadTagVocabulary(targetPath)) { // targetPath was m_downloadedFile->fileName()
+//         emit vocabularyReady(m_taggerEngine->getKnownTags());
+//     }
+// }
+// This logic needs to be integrated into onDownloadFinished carefully.
+// Let's refine onDownloadFinished.
+
+// The original onAllDownloadsCompleted is for when *all* files (model + csv) for loadModel are done.
+// We need a way for onDownloadFinished to know if the *specific* goal was just to get the CSV.
+// For now, if selected_tags.csv is downloaded, we'll try to load it and emit vocabularyReady.
+// This might emit vocabularyReady multiple times if loadModel also downloads it, but TagEditorWidget can handle that.
+
+// Refined onDownloadFinished (partial - showing the new part)
+// ... inside onDownloadFinished, after 'success = true;'
+// if (success && m_currentDownloadingFileNameForUI == "selected_tags.csv") {
+//     QString downloadedCsvPath = m_downloadedFile ? m_downloadedFile->fileName() : ""; // Path of the just downloaded file
+//     if (!downloadedCsvPath.isEmpty() && m_taggerEngine && !m_taggerEngine->isVocabularyLoaded()) {
+//          if (m_taggerEngine->loadTagVocabulary(downloadedCsvPath)) {
+//              emit vocabularyReady(m_taggerEngine->getKnownTags());
+//          }
+//     }
+// }
+// This needs to be placed carefully. Let's adjust the full onDownloadFinished.

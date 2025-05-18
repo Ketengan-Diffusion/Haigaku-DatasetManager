@@ -25,10 +25,14 @@ set(PROJECT_SOURCES
     src/ui/MainWindow.h
     src/ui/StatisticsDialog.cpp
     src/ui/StatisticsDialog.h
-    src/ui/AutoCaptionSettingsPanel.cpp     # Renamed
-    src/ui/AutoCaptionSettingsPanel.h       # Renamed
+    src/ui/AutoCaptionSettingsPanel.cpp     
+    src/ui/AutoCaptionSettingsPanel.h       
     src/ui/AutoCaptionSettingsDialog.cpp 
     src/ui/AutoCaptionSettingsDialog.h   
+    src/ui/TagPillWidget.cpp              
+    src/ui/TagPillWidget.h                
+    src/ui/TagEditorWidget.cpp            # Added
+    src/ui/TagEditorWidget.h              # Added
     src/models/ThumbnailListModel.cpp
     src/models/ThumbnailListModel.h
     src/services/ThumbnailLoader.cpp
@@ -37,17 +41,20 @@ set(PROJECT_SOURCES
     src/services/ThumbnailWorker.h
     src/services/AutoCaptionManager.cpp 
     src/services/AutoCaptionManager.h   
-    src/services/WdVIT_TaggerEngine.cpp # Added
-    src/services/WdVIT_TaggerEngine.h   # Added
+    src/services/WdVIT_TaggerEngine.cpp 
+    src/services/WdVIT_TaggerEngine.h   
+    src/utils/QFlowLayout.cpp           # Added
+    src/utils/QFlowLayout.h             # Added
     ${RESOURCE_DIR}/resources.qrc
 )
 
 # Add include directories for subfolders in src
 include_directories(
-    src # For main.cpp to find ui/MainWindow.h etc.
+    src 
     src/ui
     src/models
     src/services
+    src/utils                           # Added
     ${ONNXRUNTIME_INCLUDE_DIR} 
 )
 # If Qt6_Concurrent_INCLUDE_DIRS is set by find_package, this might help.
@@ -107,10 +114,14 @@ set(SRC_FILES
     src/ui/MainWindow.h
     src/ui/StatisticsDialog.cpp
     src/ui/StatisticsDialog.h
-    src/ui/AutoCaptionSettingsPanel.cpp     # Renamed
-    src/ui/AutoCaptionSettingsPanel.h       # Renamed
+    src/ui/AutoCaptionSettingsPanel.cpp     
+    src/ui/AutoCaptionSettingsPanel.h       
     src/ui/AutoCaptionSettingsDialog.cpp 
     src/ui/AutoCaptionSettingsDialog.h   
+    src/ui/TagPillWidget.cpp              
+    src/ui/TagPillWidget.h                
+    src/ui/TagEditorWidget.cpp            # Added
+    src/ui/TagEditorWidget.h              # Added
     src/models/ThumbnailListModel.cpp
     src/models/ThumbnailListModel.h
     src/services/ThumbnailLoader.cpp
@@ -119,8 +130,10 @@ set(SRC_FILES
     src/services/ThumbnailWorker.h
     src/services/AutoCaptionManager.cpp 
     src/services/AutoCaptionManager.h   
-    src/services/WdVIT_TaggerEngine.cpp # Added
-    src/services/WdVIT_TaggerEngine.h   # Added
+    src/services/WdVIT_TaggerEngine.cpp 
+    src/services/WdVIT_TaggerEngine.h   
+    src/utils/QFlowLayout.cpp           # Added
+    src/utils/QFlowLayout.h             # Added
 )
 source_group(TREE ${CMAKE_CURRENT_SOURCE_DIR}/src PREFIX "Source Files" FILES ${SRC_FILES})
 source_group("Resources" FILES ${RESOURCE_DIR}/resources.qrc ${RESOURCE_DIR}/aero_style.qss)

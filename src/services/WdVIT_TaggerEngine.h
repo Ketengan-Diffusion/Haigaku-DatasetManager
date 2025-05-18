@@ -20,8 +20,12 @@ public:
 
     bool loadModel(const QString &modelPath, const QString &tagsCsvPath, 
                    bool useCpu = true, bool useDirectML = false, bool useCuda = false);
-    void unloadModel();
+    bool loadTagVocabulary(const QString &tagsCsvPath); // New method
+    void unloadModel(); // Will also clear vocabulary
+    void unloadVocabulary(); // New method
     bool isModelLoaded() const;
+    bool isVocabularyLoaded() const; // New method
+    QStringList getKnownTags() const; 
 
     QStringList generateTags(const QImage &image, const QVariantMap &settings);
 
@@ -50,6 +54,7 @@ private:
     // float m_characterThreshold; // If different thresholds are used
 
     bool m_modelLoaded;
+    bool m_vocabularyLoaded; // New flag
 };
 
 #endif // WDVIT_TAGGERENGINE_H

@@ -23,7 +23,9 @@ public:
 
     enum class Device { CPU, GPU };
 
-    QVariantMap getModelSettings() const; // Added getter
+    QVariantMap getModelSettings() const; 
+    QStringList getVocabularyForCompletions() const; 
+    void ensureVocabularyLoaded(const QString &modelName = "SmilingWolf/wd-vit-tagger-v3"); // New
 
 public slots:
     // Slots to be called from UI (Task Pane, Settings Dialog)
@@ -43,9 +45,10 @@ signals:
     void modelStatusChanged(const QString &statusMessage, const QString &color);
     void captionGenerated(const QStringList &tags, const QString &forImagePath, bool autoFill); 
     void errorOccurred(const QString &errorMessage);
+    void vocabularyReady(const QStringList &vocabulary); // New signal
     // Download signals
     void downloadProgress(const QString &fileName, qint64 bytesReceived, qint64 bytesTotal);
-    void downloadComplete(const QString &fileName, bool success, const QString &errorString); // Renamed
+    void downloadComplete(const QString &fileName, bool success, const QString &errorString); 
     void allDownloadsCompleted();
 
 

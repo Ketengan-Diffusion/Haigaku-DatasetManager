@@ -10,6 +10,7 @@
 #include "services/ThumbnailLoader.h"  
 #include "ui/AutoCaptionSettingsPanel.h" 
 #include "services/AutoCaptionManager.h"
+#include "ui/TagEditorWidget.h" // Added
 
 // Forward declarations
 QT_BEGIN_NAMESPACE
@@ -58,12 +59,14 @@ private slots:
     void updateCaptionWithSuggestion(const QStringList &tags, const QString &forImagePath, bool autoFill); 
     void handleAutoCaptionError(const QString &errorMessage);
     void showAutoCaptionSettingsDialog(); 
+    void onCaptionEditingModeChanged(); 
+    void handleModelStatusChanged(const QString &status, const QString &color); // New slot
 
     void fabAutoHideTimeout(); 
     void onRefreshThumbnails(); 
     void fabAnimationFinished(); 
     void openProject();          
-    void saveProject();          // New
+    void saveProject();          
     void saveProjectAs();        
 
 private:
@@ -83,7 +86,10 @@ private:
     QStackedWidget *mediaDisplayContainer;  
     QScrollArea *imageScrollArea;    
     
-    QTextEdit *captionEditor; 
+    QStackedWidget *m_captionInputStackedWidget; // Added
+    QTextEdit *captionEditor;      // For NLP mode
+    TagEditorWidget *m_tagEditorWidget; // For Tags mode
+
     QListView *thumbnailListView; 
     QLabel *fileDetailsLabel;
     QToolButton *m_bulbButton; 
@@ -108,7 +114,7 @@ private:
     AutoCaptionManager *m_autoCaptionManager;
     QString m_suggestedCaption; 
 
-    QGroupBox *m_captionModeSwitchGroup;      
+    QButtonGroup *m_captionModeSwitchGroup; // Corrected type to QButtonGroup
     QRadioButton *m_nlpModeRadioMain;         
     QRadioButton *m_tagsModeRadioMain;        
 
@@ -141,13 +147,15 @@ private:
     // Menu actions
     QAction *openDirAction;
     QAction *openProjectAction;      
-    QAction *saveProjectAction;      // New
+    QAction *saveProjectAction;      
     QAction *saveProjectAsAction;    
     QAction *exitAction;
     QAction *aboutAction;
     QAction *aboutQtAction; 
     QAction *statisticsAction; 
     QAction *refreshThumbnailsAction; 
+
+    bool m_storeManualTagsWithUnderscores; // User preference for tag storage
 
 protected:
     void keyPressEvent(QKeyEvent *event) override;

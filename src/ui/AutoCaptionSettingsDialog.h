@@ -33,6 +33,7 @@ private:
     QCheckBox *m_charTagsFirstCheckBox;
     QCheckBox *m_hideRatingTagsCheckBox;
     QCheckBox *m_removeSeparatorCheckBox;
+    QCheckBox *m_storeManualTagsWithUnderscoresCheckBox; // New setting for manual tag storage format
     // Add more QWidgets for other models' settings as needed
 
     QDialogButtonBox *m_buttonBox;
