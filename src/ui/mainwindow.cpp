@@ -6,6 +6,7 @@
 #include "services/ThumbnailLoader.h"  
 #include "services/AutoCaptionManager.h" 
 #include "ui/TagEditorWidget.h" 
+#include "ui/ThumbnailDelegate.h" // Added
 #include "utils/QFlowLayout.h" 
 
 #include <QApplication>
@@ -91,7 +92,7 @@ MainWindow::MainWindow(QWidget *parent)
     , audioOutput(nullptr)
     , currentMediaIndex(-1)
     , captionChangedSinceLoad(false)
-    , thumbnailDefaultSize(180, 100)
+    , thumbnailDefaultSize(180, 100) // Default, can be overridden by settings
     , autoSaveTimer(nullptr)
     , m_scrollStopTimer(nullptr) 
     , openDirAction(nullptr) 
@@ -112,6 +113,9 @@ MainWindow::MainWindow(QWidget *parent)
     // Load persistent settings
     QSettings settings("KetenganDiffusion", "HaigakuManager");
     m_storeManualTagsWithUnderscores = settings.value("storeManualTagsWithUnderscores", false).toBool();
+    int savedIconWidth = settings.value("thumbnailWidth", 180).toInt();
+    int savedIconHeight = settings.value("thumbnailHeight", 100).toInt();
+    thumbnailDefaultSize = QSize(savedIconWidth, savedIconHeight);
 
 
     mediaPlayer = new QMediaPlayer(this);
@@ -154,9 +158,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_autoCaptionManager, &AutoCaptionManager::vocabularyReady, this, [this](const QStringList &vocabularyWithUnderscores){ 
         if (m_tagEditorWidget && !vocabularyWithUnderscores.isEmpty()) {
             m_tagEditorWidget->setKnownTagsVocabulary(vocabularyWithUnderscores);
-            qDebug() << "MainWindow: Vocabulary set for TagEditorWidget via vocabularyReady signal:" << vocabularyWithUnderscores.size() << "tags.";
+            // qDebug() << "MainWindow: Vocabulary set for TagEditorWidget via vocabularyReady signal:" << vocabularyWithUnderscores.size() << "tags.";
         } else {
-            qDebug() << "MainWindow: vocabularyReady signal received, but vocab empty or tagEditorWidget null.";
+            // qDebug() << "MainWindow: vocabularyReady signal received, but vocab empty or tagEditorWidget null.";
         }
     });
     
@@ -221,6 +225,8 @@ MainWindow::MainWindow(QWidget *parent)
 MainWindow::~MainWindow() {
     QSettings settings("KetenganDiffusion", "HaigakuManager");
     settings.setValue("storeManualTagsWithUnderscores", m_storeManualTagsWithUnderscores);
+    settings.setValue("thumbnailWidth", thumbnailDefaultSize.width());
+    settings.setValue("thumbnailHeight", thumbnailDefaultSize.height());
 }
 
 void MainWindow::setupUI()
@@ -239,6 +245,8 @@ void MainWindow::setupUI()
     thumbnailListView->setResizeMode(QListView::Adjust); 
     thumbnailListView->setMovement(QListView::Static); 
     thumbnailListView->setWordWrap(true); 
+    thumbnailListView->setItemDelegate(new ThumbnailDelegate(thumbnailDefaultSize, this)); // Pass the QSize object
+
     connect(thumbnailListView, &QListView::clicked, this, &MainWindow::onThumbnailViewClicked);
     connect(thumbnailListView->verticalScrollBar(), &QScrollBar::valueChanged, this, &MainWindow::onThumbnailViewScrolled);
     mainSplitter->addWidget(thumbnailListView);
@@ -293,7 +301,7 @@ void MainWindow::setupUI()
     captionHeaderLayout->addLayout(nlpTagsLayout); 
     captionHeaderLayout->addStretch(); 
     m_bulbButton = new QToolButton(rightPanelContainer);
-    m_bulbButton->setIcon(style()->standardIcon(QStyle::SP_DialogHelpButton)); 
+    m_bulbButton->setIcon(QIcon(":/icons/bulb.png")); 
     m_bulbButton->setToolTip(tr("Generate Auto-Caption Suggestion"));
     connect(m_bulbButton, &QToolButton::clicked, this, &MainWindow::onBulbButtonClicked);
     captionHeaderLayout->addWidget(m_bulbButton);
@@ -316,7 +324,6 @@ void MainWindow::setupUI()
         captionChangedSinceLoad = true;
         if (currentMediaIndex >= 0 && currentMediaIndex < mediaFiles.count()) {
             if(m_tagsModeRadioMain->isChecked()) {
-                // For unsavedCaptions, always store with spaces for internal consistency
                 unsavedCaptions[mediaFiles.at(currentMediaIndex)] = m_tagEditorWidget->getTags(false).join(", ");
             }
         }
@@ -339,8 +346,8 @@ void MainWindow::setupUI()
 
     m_sparkleActionButton = new QToolButton(this);
     m_sparkleActionButton->setGraphicsEffect(m_fabOpacityEffect); 
-    m_sparkleActionButton->setIcon(style()->standardIcon(QStyle::SP_DialogYesButton)); 
-    m_sparkleActionButton->setIconSize(QSize(24, 24)); 
+    m_sparkleActionButton->setIcon(QIcon(":/icons/sparkle_fab.png")); 
+    m_sparkleActionButton->setIconSize(QSize(24, 24)); // Adjust if your icon needs a different size
     m_sparkleActionButton->setFixedSize(QSize(36, 36)); 
     m_sparkleActionButton->setToolTip(tr("Auto-Caption Settings"));
     m_sparkleActionButton->setStyleSheet("QToolButton { border: 1px solid #8f8f91; border-radius: 18px; background-color: palette(window); } QToolButton:hover { background-color: palette(highlight); }");
@@ -364,7 +371,6 @@ void MainWindow::onCaptionEditingModeChanged() {
     if (previousEditor == captionEditor) {
         currentTextToStore = captionEditor->toPlainText();
     } else if (previousEditor == m_tagEditorWidget) {
-        // When switching modes, get tags with spaces for consistency
         currentTextToStore = m_tagEditorWidget->getTags(false).join(", ");
     }
 
@@ -382,7 +388,6 @@ void MainWindow::onCaptionEditingModeChanged() {
             QStringList tags = currentTextToStore.split(',', Qt::SkipEmptyParts);
             QStringList cleanedTags;
             for(const QString &tag : tags) cleanedTags.append(tag.trimmed());
-            // When setting tags from NLP to Tags mode, assume input has spaces (no underscores)
             m_tagEditorWidget->setTags(cleanedTags, false); 
         }
         m_captionInputStackedWidget->setCurrentWidget(m_tagEditorWidget);
@@ -490,7 +495,6 @@ bool MainWindow::eventFilter(QObject *watched, QEvent *event) {
         if (event->type() == QEvent::KeyPress) {
             QKeyEvent *keyEvent = static_cast<QKeyEvent*>(event);
             if (keyEvent->key() == Qt::Key_Tab && !m_suggestedCaption.isEmpty() && m_nlpModeRadioMain->isChecked()) {
-                qDebug() << "Tab pressed in captionEditor (NLP mode). m_suggestedCaption:" << m_suggestedCaption;
                 captionEditor->setPlainText(m_suggestedCaption);
                 captionEditor->setPlaceholderText(""); 
                 QTextCursor cursor = captionEditor->textCursor();
@@ -545,7 +549,6 @@ void MainWindow::updateCaptionWithSuggestion(const QStringList &tags, const QStr
             statusBar()->showMessage(tr("Tags generated by model. Type to see suggestions."), 3000);
         }
     }
-    qDebug() << "Suggestion received:" << m_suggestedCaption << "AutoFill:" << autoFill;
 }
 
 void MainWindow::handleAutoCaptionError(const QString &errorMessage) {
@@ -557,7 +560,6 @@ void MainWindow::showAutoCaptionSettingsDialog() {
     if (!m_autoCaptionManager || !m_autoCaptionSettingsPanel) return;
     QString currentModel = "SmilingWolf/wd-vit-tagger-v3"; 
     QVariantMap currentSettings = m_autoCaptionManager->getModelSettings(); 
-    // Ensure current preference for storeManualTagsWithUnderscores is passed to dialog
     currentSettings["store_manual_tags_with_underscores"] = m_storeManualTagsWithUnderscores;
     
     AutoCaptionSettingsDialog dialog(currentModel, currentSettings, this);
@@ -569,7 +571,6 @@ void MainWindow::showAutoCaptionSettingsDialog() {
         if (m_tagEditorWidget) {
             m_tagEditorWidget->setStoreTagsWithUnderscores(m_storeManualTagsWithUnderscores); 
         }
-        qDebug() << "MainWindow: Store manual tags with underscores set to:" << m_storeManualTagsWithUnderscores;
         
         QSettings appSettings("KetenganDiffusion", "HaigakuManager");
         appSettings.setValue("storeManualTagsWithUnderscores", m_storeManualTagsWithUnderscores);
@@ -582,11 +583,10 @@ void MainWindow::onThumbnailViewClicked(const QModelIndex &index) {
         if (m_nlpModeRadioMain->isChecked() && captionEditor) {
             currentCaptionText = captionEditor->toPlainText();
         } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-            // Always get with spaces for unsavedCaptions
-            currentCaptionText = m_tagEditorWidget->getTags(false).join(", ");
+            currentCaptionText = m_tagEditorWidget->getTags(false).join(", "); 
         }
-        if (!currentCaptionText.isEmpty() || unsavedCaptions.contains(mediaFiles.at(currentMediaIndex))) {
-             unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
+         if (!currentCaptionText.isEmpty() || unsavedCaptions.contains(mediaFiles.at(currentMediaIndex))) {
+            unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
         }
     }
     displayMediaAtIndex(index.row());
@@ -681,7 +681,7 @@ void MainWindow::openDirectory() {
         if (m_nlpModeRadioMain->isChecked() && captionEditor) {
             currentCaptionText = captionEditor->toPlainText();
         } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-            currentCaptionText = m_tagEditorWidget->getTags(false).join(", "); // Always spaces for unsaved
+            currentCaptionText = m_tagEditorWidget->getTags(false).join(", "); 
         }
          if (!currentCaptionText.isEmpty() || unsavedCaptions.contains(mediaFiles.at(currentMediaIndex))) {
             unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
@@ -838,11 +838,6 @@ void MainWindow::loadCaptionForCurrentImage() {
         for(const QString &tag : tags) {
             cleanedTags.append(tag.trimmed());
         }
-        // When loading from file, assume tags might have underscores if that was the save format.
-        // However, TagEditorWidget internally wants tags with spaces.
-        // The `inputHasUnderscores` parameter of `setTags` is tricky.
-        // For now, assume loaded captions are space-separated for simplicity,
-        // unless we store metadata about their format.
         m_tagEditorWidget->setTags(cleanedTags, false); 
     }
     captionChangedSinceLoad = false; 
@@ -854,7 +849,6 @@ void MainWindow::saveCurrentCaption()  {
     if (m_nlpModeRadioMain && m_nlpModeRadioMain->isChecked() && captionEditor) {
         captionTextToSave = captionEditor->toPlainText();
     } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-        // Use the member variable m_storeManualTagsWithUnderscores to determine format for saving
         captionTextToSave = m_tagEditorWidget->getTags(m_storeManualTagsWithUnderscores).join(", ");
     } else {
         return;
@@ -904,13 +898,13 @@ void MainWindow::applyScoreToCaption(int scoreValue)  {
         for(int i = 0; i < parts.size(); ++i) parts[i] = parts[i].trimmed();
         captionEditor->setPlainText(parts.join(", "));
     } else if (m_tagsModeRadioMain && m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-        QStringList currentTags = m_tagEditorWidget->getTags(false); // Get with spaces for manipulation
+        QStringList currentTags = m_tagEditorWidget->getTags(false); 
         
         QString scoreWordForDisplay = scoreWord; 
         
         QStringList existingScoresDisplay = {"Worst", "Lousy", "adequate", "Superior", "Masterpiece", "Exceptional", "Iconic"};
         
-        for(const QString& es : existingScoresDisplay) { // Iterate and remove all existing scores
+        for(const QString& es : existingScoresDisplay) { 
             currentTags.removeAll(es);
         }
         
@@ -965,7 +959,6 @@ void MainWindow::previousMedia() {
     }
 }
 void MainWindow::performAutoSave() { 
-    qDebug() << "Performing auto-save...";
     bool projectSaved = false;
     if (!m_currentProjectPath.isEmpty() && !currentDirectory.isEmpty()) {
         QSettings projectFile(m_currentProjectPath, QSettings::IniFormat);
@@ -979,7 +972,6 @@ void MainWindow::performAutoSave() {
              if (m_nlpModeRadioMain->isChecked() && captionEditor) {
                 currentCaptionText = captionEditor->toPlainText();
             } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-                // For unsavedCaptions, always store with spaces
                 currentCaptionText = m_tagEditorWidget->getTags(false).join(", ");
             }
             unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
@@ -1176,7 +1168,6 @@ void MainWindow::saveProjectAs()
             if (m_nlpModeRadioMain->isChecked() && captionEditor) {
             currentCaptionText = captionEditor->toPlainText();
         } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-            // Use the member variable m_storeManualTagsWithUnderscores
             currentCaptionText = m_tagEditorWidget->getTags(m_storeManualTagsWithUnderscores).join(", ");
         }
         unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
@@ -1222,7 +1213,6 @@ void MainWindow::saveProject()
             if (m_nlpModeRadioMain->isChecked() && captionEditor) {
             currentCaptionText = captionEditor->toPlainText();
         } else if (m_tagsModeRadioMain->isChecked() && m_tagEditorWidget) {
-            // Use the member variable m_storeManualTagsWithUnderscores
             currentCaptionText = m_tagEditorWidget->getTags(m_storeManualTagsWithUnderscores).join(", ");
         }
         unsavedCaptions[mediaFiles.at(currentMediaIndex)] = currentCaptionText;
@@ -1280,16 +1270,8 @@ void MainWindow::openProject()
     QDir dir(currentDirectory);
     for (const QString &relativeFilePath : relativeFilePaths) {
         QString absoluteFilePath = dir.filePath(relativeFilePath);
-        // When loading from project, assume tags are stored in the format dictated by m_storeManualTagsWithUnderscores
-        // For TagEditorWidget, we always want to set them with spaces.
-        // So, if they were stored with underscores, convert them back.
         QString captionFromFile = projectFile.value(relativeFilePath).toString();
-        if (m_storeManualTagsWithUnderscores) { // If they were stored with underscores
-            // This logic is imperfect if the project was saved with a different setting than current.
-            // A better project format would store the setting itself or always store with spaces.
-            // For now, assume if m_storeManualTagsWithUnderscores is true, the file *might* have them.
-        }
-        unsavedCaptions[absoluteFilePath] = captionFromFile; // Store as is from file for now
+        unsavedCaptions[absoluteFilePath] = captionFromFile; 
     }
     projectFile.endGroup();
 
@@ -1305,7 +1287,6 @@ void MainWindow::openProject()
 
 void MainWindow::handleModelStatusChanged(const QString &status, const QString &color)
 {
-    qDebug() << "MainWindow::handleModelStatusChanged - Status:" << status << "Color:" << color;
     if (m_autoCaptionSettingsPanel) { 
         m_autoCaptionSettingsPanel->setModelStatus(status, color);
     }
@@ -1313,9 +1294,6 @@ void MainWindow::handleModelStatusChanged(const QString &status, const QString &
         QStringList vocabWithUnderscores = m_autoCaptionManager->getVocabularyForCompletions();
         if (!vocabWithUnderscores.isEmpty()) {
             m_tagEditorWidget->setKnownTagsVocabulary(vocabWithUnderscores);
-            qDebug() << "Tag vocabulary set for TagEditorWidget:" << vocabWithUnderscores.size() << "tags. First 5:" << vocabWithUnderscores.mid(0,5);
-        } else {
-            qDebug() << "Failed to get vocabulary or vocabulary is empty after model load (handleModelStatusChanged).";
         }
     }
 }

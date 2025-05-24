@@ -35,6 +35,7 @@ int main(int argc, char *argv[])
 
     MainWindow w;
     w.setWindowTitle("Haigaku Manager"); // Set initial window title
+    app.setWindowIcon(QIcon(":/icons/app_icon.png")); // Set application icon
     // We can add a dummy icon later if needed, or wait for the custom one.
     w.show();
 

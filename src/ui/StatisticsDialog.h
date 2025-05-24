@@ -2,14 +2,18 @@
 #define STATISTICSDIALOG_H
 
 #include <QDialog>
-#include <QStringList> // To pass media file list
+#include <QStringList> 
+#include <QMap> // For tag frequencies
 
 QT_BEGIN_NAMESPACE
 class QTextEdit;
 class QPushButton;
 class QVBoxLayout;
-class QProgressBar; // To show calculation progress
+class QProgressBar; 
+class QTabWidget; // Added for tabbing
 QT_END_NAMESPACE
+
+class WordCloudWidget; // Forward declaration
 
 // Struct to hold calculated statistics
 struct DatasetStatistics {
@@ -23,9 +27,10 @@ struct DatasetStatistics {
     int maxCaptionLengthWords = 0;
     int minCaptionLengthWords = -1; // -1 indicates not set or no non-empty captions
     double averageCaptionLengthWords = 0.0;
-    int totalFilesProcessed = 0; // For progress tracking
+    int totalFilesProcessed = 0; 
+    QMap<QString, int> tagFrequencies; // Added to hold tag counts
 
-    QString toString() const; // Helper to format for display
+    QString toString() const; 
 };
 
 
@@ -40,23 +45,29 @@ public:
 private slots:
     void calculateStatistics();
     void updateStatisticsDisplay(const DatasetStatistics &stats);
-    void updateProgress(int processedCount, int totalCount); // Slot to update progress bar
+    void updateProgress(int processedCount, int totalCount); 
 
 signals:
-    void progressUpdated(int processedCount, int totalCount); // Signal for progress
+    void progressUpdated(int processedCount, int totalCount); 
 
 private:
     void setupUI();
-    DatasetStatistics performCalculations(); // Takes no args, uses member variables
+    DatasetStatistics performCalculations(); 
 
 
-    QTextEdit *statisticsDisplay;
-    QPushButton *calculateButton;
-    QPushButton *closeButton;
-    QProgressBar *progressBar;
+    QTabWidget *m_tabWidget; // Added
+    QTextEdit *m_statisticsTextDisplay; // Renamed for clarity
+    WordCloudWidget *m_wordCloudWidget; // Added
 
-    QStringList mediaFilePaths; // Copy of the list from MainWindow
-    QString baseDirectoryPath;  // The directory being analyzed
+    QPushButton *m_calculateButton; // Renamed
+    QPushButton *m_closeButton;    // Renamed
+    QProgressBar *m_progressBar;   
+
+    QPushButton *m_zoomInButton;    // Added
+    QPushButton *m_zoomOutButton;   // Added
+
+    QStringList m_mediaFilePaths; 
+    QString m_baseDirectoryPath; 
 };
 
 #endif // STATISTICSDIALOG_H

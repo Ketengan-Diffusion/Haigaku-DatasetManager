@@ -1,6 +1,9 @@
 <!DOCTYPE RCC><RCC version="1.0">
 <qresource prefix="/">
     <file alias="app_style.qss">aero_style.qss</file>
+    <file alias="icons/sparkle_fab.png">icons/sparkle_fab.png</file>
+    <file alias="icons/bulb.png">icons/bulb.png</file>
+    <file alias="icons/app_icon.png">icons/app_icon.png</file>
     <!-- We can add icons here later -->
 </qresource>
 </RCC>

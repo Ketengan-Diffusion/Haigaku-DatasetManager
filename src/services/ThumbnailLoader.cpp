@@ -168,17 +168,18 @@ void ThumbnailLoader::handleImageReady(int row, const QImage &scaledImage, const
     // Create the final canvas using the originalTargetSize
     QImage finalImage(originalTargetSize, QImage::Format_ARGB32_Premultiplied);
     finalImage.fill(Qt::transparent); 
+    qDebug() << "ThumbnailLoader::handleImageReady for row" << row << filePath << "Worker QImage isNull:" << scaledImage.isNull() << "Size:" << scaledImage.size() << "Target:" << originalTargetSize;
 
     QPainter painter(&finalImage);
-    // No need for CompositionMode_Source if we fill transparent first and draw opaque/semi-transparent on top.
-    // painter.setCompositionMode(QPainter::CompositionMode_Source); 
     
-    // Calculate x, y to center the scaledImage onto the finalImage canvas
     int x = (originalTargetSize.width() - scaledImage.width()) / 2;
     int y = (originalTargetSize.height() - scaledImage.height()) / 2;
     
     painter.drawImage(x, y, scaledImage);
-    painter.end(); // Finish painting on QImage
+    painter.end(); 
+    
+    QPixmap finalPixmap = QPixmap::fromImage(finalImage);
+    qDebug() << "ThumbnailLoader::handleImageReady - Final QPixmap for Icon, isNull:" << finalPixmap.isNull() << "Size:" << finalPixmap.size();
             
-    emit thumbnailReady(row, QIcon(QPixmap::fromImage(finalImage)));
+    emit thumbnailReady(row, QIcon(finalPixmap));
 }

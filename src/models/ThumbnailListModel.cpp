@@ -37,12 +37,13 @@ QVariant ThumbnailListModel::data(const QModelIndex &index, int role) const
         return QFileInfo(filePath).fileName();
     } else if (role == Qt::DecorationRole) {
         if (index.row() < m_thumbnails.count() && !m_thumbnails.at(index.row()).isNull()) {
-            return m_thumbnails.at(index.row());
+            QPixmap p = m_thumbnails.at(index.row()).pixmap(m_thumbnailSize);
+            // qDebug() << "ThumbnailListModel::data returning for row" << index.row() << "Pixmap isNull:" << p.isNull() << "Size:" << p.size();
+            return p; 
         } else {
-            // Thumbnail not loaded or not ready yet.
-            // The MainWindow will now be responsible for requesting thumbnails based on visibility.
-            // This method just returns the placeholder if not already cached.
-            return m_placeholderIcon;
+            QPixmap p = m_placeholderIcon.pixmap(m_thumbnailSize);
+            // qDebug() << "ThumbnailListModel::data returning PLACEHOLDER for row" << index.row() << "Pixmap isNull:" << p.isNull() << "Size:" << p.size();
+            return p; 
         }
     }
     return QVariant();

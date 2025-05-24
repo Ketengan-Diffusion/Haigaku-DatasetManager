@@ -1,45 +1,49 @@
 #include "StatisticsDialog.h"
+#include "WordCloudWidget.h" // Added
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QTextEdit>
 #include <QPushButton>
 #include <QProgressBar>
-#include <QFileDialog> // For QDir, QFileInfo
-#include <QImageReader> // For image dimensions
-#include <QtConcurrent/QtConcurrent> // For background calculation
+#include <QFile>
+#include <QTextStream>
+#include <QFileInfo>
+#include <QImageReader>
+#include <QDir>
 #include <QDebug>
+#include <QTabWidget> // Added
+#include <QRegularExpression> // For splitting tags
 
+// Implementation of DatasetStatistics::toString()
 QString DatasetStatistics::toString() const {
     QString result;
-    result += QString("Total Media Files Processed: %1\n").arg(totalFilesProcessed);
     result += QString("Total Media Size: %1 MB\n").arg(totalMediaSize / (1024.0 * 1024.0), 0, 'f', 2);
+    result += QString("Captioned Media Count: %1\n").arg(captionedMediaCount);
     result += QString("Image Count: %1\n").arg(imageCount);
     result += QString("Video Count: %1\n").arg(videoCount);
-    result += QString("Captioned Media: %1\n").arg(captionedMediaCount);
-    result += QString("Unpaired Captions (Media without .txt/.caption): %1\n").arg(unpairedCaptionCount);
-    
-    if (imageCount > 0) {
-        result += QString("Max Image Pixels: %L1\n").arg(maxPixels);
-        result += QString("Average Image Pixels: %L1\n").arg(static_cast<long long>(averagePixels));
+    result += QString("Unpaired Caption Files: %1\n").arg(unpairedCaptionCount);
+    result += QString("Max Pixels (W*H): %1\n").arg(maxPixels);
+    result += QString("Average Pixels (W*H): %1\n").arg(averagePixels, 0, 'f', 0);
+    if (minCaptionLengthWords != -1) {
+        result += QString("Min Caption Length (words): %1\n").arg(minCaptionLengthWords);
+    } else {
+        result += QString("Min Caption Length (words): N/A\n");
     }
-    
-    int nonEmptyCaptionCount = captionedMediaCount; // Approximation for now
-    if (nonEmptyCaptionCount > 0) {
-        result += QString("Max Caption Length (words): %1\n").arg(maxCaptionLengthWords);
-        result += QString("Min Caption Length (words): %1\n").arg(minCaptionLengthWords == -1 ? "N/A" : QString::number(minCaptionLengthWords));
-        result += QString("Average Caption Length (words): %1\n").arg(averageCaptionLengthWords, 0, 'f', 1);
-    }
+    result += QString("Max Caption Length (words): %1\n").arg(maxCaptionLengthWords);
+    result += QString("Average Caption Length (words): %1\n").arg(averageCaptionLengthWords, 0, 'f', 2);
+    result += QString("Total Files Processed: %1\n").arg(totalFilesProcessed);
     return result;
 }
 
+
 StatisticsDialog::StatisticsDialog(const QStringList &mediaFiles, const QString &currentDirectory, QWidget *parent)
-    : QDialog(parent), mediaFilePaths(mediaFiles), baseDirectoryPath(currentDirectory)
+    : QDialog(parent), m_mediaFilePaths(mediaFiles), m_baseDirectoryPath(currentDirectory)
 {
-    setupUI();
     setWindowTitle(tr("Dataset Statistics"));
     setMinimumSize(500, 400);
-
-    // Connect the progress signal to the slot that updates the UI
+    setupUI();
+    connect(m_calculateButton, &QPushButton::clicked, this, &StatisticsDialog::calculateStatistics);
+    connect(m_closeButton, &QPushButton::clicked, this, &StatisticsDialog::accept);
     connect(this, &StatisticsDialog::progressUpdated, this, &StatisticsDialog::updateProgress);
 }
 
@@ -51,125 +55,144 @@ void StatisticsDialog::setupUI()
 {
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
 
-    statisticsDisplay = new QTextEdit(this);
-    statisticsDisplay->setReadOnly(true);
-    statisticsDisplay->setFontFamily("monospace"); // Good for aligned text
-    mainLayout->addWidget(statisticsDisplay, 1);
+    m_tabWidget = new QTabWidget(this); // Create tab widget
 
-    progressBar = new QProgressBar(this);
-    progressBar->setRange(0, 0); // Indeterminate initially
-    progressBar->setVisible(false); // Hide until calculation starts
-    mainLayout->addWidget(progressBar);
+    // Statistics Text Tab
+    QWidget *textStatsPage = new QWidget(this);
+    QVBoxLayout *textStatsLayout = new QVBoxLayout(textStatsPage);
+    m_statisticsTextDisplay = new QTextEdit(this);
+    m_statisticsTextDisplay->setReadOnly(true);
+    textStatsLayout->addWidget(m_statisticsTextDisplay);
+    textStatsPage->setLayout(textStatsLayout);
+    m_tabWidget->addTab(textStatsPage, tr("Summary"));
 
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    calculateButton = new QPushButton(tr("Calculate Statistics"), this);
-    connect(calculateButton, &QPushButton::clicked, this, &StatisticsDialog::calculateStatistics);
-    buttonLayout->addWidget(calculateButton);
-
-    buttonLayout->addStretch();
-
-    closeButton = new QPushButton(tr("Close"), this);
-    connect(closeButton, &QPushButton::clicked, this, &StatisticsDialog::accept);
-    buttonLayout->addWidget(closeButton);
+    // Word Cloud Tab
+    m_wordCloudWidget = new WordCloudWidget(this);
+    m_tabWidget->addTab(m_wordCloudWidget, tr("Word Cloud"));
     
-    mainLayout->addLayout(buttonLayout);
+    mainLayout->addWidget(m_tabWidget); // Add tab widget to main layout
+
+    m_progressBar = new QProgressBar(this);
+    m_progressBar->setRange(0, 100);
+    m_progressBar->setValue(0);
+    mainLayout->addWidget(m_progressBar);
+
+    QHBoxLayout *bottomButtonLayout = new QHBoxLayout(); // Renamed for clarity
+    m_calculateButton = new QPushButton(tr("Calculate Statistics"), this);
+    m_closeButton = new QPushButton(tr("Close"), this);
+
+    // Zoom buttons
+    m_zoomInButton = new QPushButton("+", this);
+    m_zoomInButton->setToolTip(tr("Zoom In Word Cloud"));
+    m_zoomInButton->setFixedSize(30, 30);
+    m_zoomOutButton = new QPushButton("-", this);
+    m_zoomOutButton->setToolTip(tr("Zoom Out Word Cloud"));
+    m_zoomOutButton->setFixedSize(30, 30);
+
+    bottomButtonLayout->addWidget(m_calculateButton);
+    bottomButtonLayout->addStretch();
+    bottomButtonLayout->addWidget(m_zoomOutButton);
+    bottomButtonLayout->addWidget(m_zoomInButton);
+    bottomButtonLayout->addSpacing(20); // Space before close button
+    bottomButtonLayout->addWidget(m_closeButton);
+    mainLayout->addLayout(bottomButtonLayout);
+
     setLayout(mainLayout);
 
-    statisticsDisplay->setText(tr("Click 'Calculate Statistics' to begin.\nAnalysis might take some time for large datasets."));
+    // Connect zoom buttons
+    if (m_wordCloudWidget) {
+        connect(m_zoomInButton, &QPushButton::clicked, m_wordCloudWidget, &WordCloudWidget::zoomIn);
+        connect(m_zoomOutButton, &QPushButton::clicked, m_wordCloudWidget, &WordCloudWidget::zoomOut);
+    }
 }
 
 void StatisticsDialog::calculateStatistics()
 {
-    if (mediaFilePaths.isEmpty()) {
-        statisticsDisplay->setText(tr("No media files loaded in the main application."));
-        return;
-    }
-
-    calculateButton->setEnabled(false);
-    closeButton->setEnabled(false);
-    progressBar->setRange(0, mediaFilePaths.count());
-    progressBar->setValue(0);
-    progressBar->setVisible(true);
-    statisticsDisplay->setText(tr("Calculating..."));
-
-    // Run calculations in a background thread
-    // performCalculations now uses member variables mediaFilePaths and baseDirectoryPath
-    QFuture<DatasetStatistics> future = QtConcurrent::run([this]() {
-        return this->performCalculations(); 
-    });
-
-    // Use QFutureWatcher to get the result on the main thread
-    QFutureWatcher<DatasetStatistics> *watcher = new QFutureWatcher<DatasetStatistics>(this);
-    connect(watcher, &QFutureWatcher<DatasetStatistics>::finished, this, [this, watcher]() {
-        DatasetStatistics stats = watcher->result();
-        updateStatisticsDisplay(stats);
-        calculateButton->setEnabled(true);
-        closeButton->setEnabled(true);
-        progressBar->setVisible(false);
-        watcher->deleteLater(); // Clean up watcher
-    });
-    // If we need progress updates from performCalculations, it would emit signals
-    // connected to updateProgress slot. For now, performCalculations is synchronous internally.
-    watcher->setFuture(future);
+    m_calculateButton->setEnabled(false);
+    m_progressBar->setValue(0);
+    DatasetStatistics stats = performCalculations();
+    updateStatisticsDisplay(stats);
+    m_calculateButton->setEnabled(true);
 }
 
+void StatisticsDialog::updateStatisticsDisplay(const DatasetStatistics &stats)
+{
+    m_statisticsTextDisplay->setText(stats.toString());
+    if (m_wordCloudWidget) {
+        m_wordCloudWidget->setWordData(stats.tagFrequencies);
+    }
+}
 
-DatasetStatistics StatisticsDialog::performCalculations() // Now uses member variables
+void StatisticsDialog::updateProgress(int processedCount, int totalCount)
+{
+    if (totalCount > 0) {
+        int percentage = static_cast<int>((static_cast<double>(processedCount) / totalCount) * 100.0);
+        m_progressBar->setValue(percentage);
+    }
+}
+
+DatasetStatistics StatisticsDialog::performCalculations()
 {
     DatasetStatistics stats;
-    stats.totalFilesProcessed = mediaFilePaths.count(); // Use member variable
-    long long totalPixels = 0;
-    int captionWordSum = 0;
-    int nonEmptyCaptions = 0;
+    stats.totalFilesProcessed = m_mediaFilePaths.size();
+    int currentFileNum = 0;
 
-    QStringList imageExtensions = {"jpg", "jpeg", "png", "bmp", "gif", "webp", "tiff"};
-    QStringList videoExtensions = {"mp4", "mkv", "webm"};
+    long long totalPixelSum = 0;
+    int mediaWithPixelsCount = 0;
+    long long totalCaptionWords = 0;
+    int captionsWithWordsCount = 0;
 
-    for (int i = 0; i < mediaFilePaths.count(); ++i) { // Use member variable
-        const QString &filePath = mediaFilePaths.at(i); // Use member variable
+    QRegularExpression commaSeparator(QStringLiteral("\\s*,\\s*")); // Matches comma possibly surrounded by whitespace
+
+    for (const QString &filePath : m_mediaFilePaths) {
+        emit progressUpdated(++currentFileNum, stats.totalFilesProcessed);
+        QCoreApplication::processEvents(); // Keep UI responsive
+
         QFileInfo fileInfo(filePath);
         stats.totalMediaSize += fileInfo.size();
 
-        bool isImage = imageExtensions.contains(fileInfo.suffix().toLower());
-        bool isVideo = videoExtensions.contains(fileInfo.suffix().toLower());
-
-        if (isImage) {
+        QString extension = fileInfo.suffix().toLower();
+        if (extension == "jpg" || extension == "jpeg" || extension == "png" || extension == "bmp" || extension == "gif" || extension == "webp") {
             stats.imageCount++;
             QImageReader reader(filePath);
-            QSize s = reader.size();
-            if (s.isValid()) {
-                long long currentPixels = static_cast<long long>(s.width()) * s.height();
-                totalPixels += currentPixels;
-                if (currentPixels > stats.maxPixels) {
-                    stats.maxPixels = currentPixels;
+            if (reader.canRead()) {
+                QSize size = reader.size();
+                if (size.isValid()) {
+                    long long pixels = static_cast<long long>(size.width()) * size.height();
+                    totalPixelSum += pixels;
+                    mediaWithPixelsCount++;
+                    if (pixels > stats.maxPixels) {
+                        stats.maxPixels = pixels;
+                    }
                 }
             }
-        } else if (isVideo) {
+        } else if (extension == "mp4" || extension == "mkv" || extension == "avi" || extension == "mov" || extension == "webm" || extension == "flv") {
             stats.videoCount++;
+            // Video pixel/resolution stats might require a multimedia library like FFmpeg, skip for now for simplicity
         }
 
-        // Caption analysis
-        QString captionPathTxt = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + ".txt";
-        QString captionPathCaption = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + ".caption";
-        QFile captionFile;
-        bool captionExists = false;
-        if (QFile::exists(captionPathTxt)) {
-            captionFile.setFileName(captionPathTxt);
-            captionExists = true;
-        } else if (QFile::exists(captionPathCaption)) {
-            captionFile.setFileName(captionPathCaption);
-            captionExists = true;
-        }
-
-        if (captionExists) {
+        QString captionPath = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + ".txt";
+        QFile captionFile(captionPath);
+        if (captionFile.exists() && captionFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
             stats.captionedMediaCount++;
-            if (captionFile.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                QString captionContent = captionFile.readAll();
-                QStringList words = captionContent.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-                int wordCount = words.count();
+            QTextStream in(&captionFile);
+            QString content = in.readAll().trimmed();
+            captionFile.close();
+
+            if (!content.isEmpty()) {
+                QStringList tags = content.split(commaSeparator, Qt::SkipEmptyParts);
+                int wordCount = 0;
+                for (const QString& tag : tags) {
+                    QString cleanTag = tag.trimmed();
+                    if (!cleanTag.isEmpty()) {
+                        wordCount++; // Each comma-separated item is a "word" or "tag" for this purpose
+                        stats.tagFrequencies[cleanTag.toLower()]++; // Case-insensitive counting
+                    }
+                }
+
                 if (wordCount > 0) {
-                    nonEmptyCaptions++;
-                    captionWordSum += wordCount;
+                    totalCaptionWords += wordCount;
+                    captionsWithWordsCount++;
                     if (wordCount > stats.maxCaptionLengthWords) {
                         stats.maxCaptionLengthWords = wordCount;
                     }
@@ -177,51 +200,73 @@ DatasetStatistics StatisticsDialog::performCalculations() // Now uses member var
                         stats.minCaptionLengthWords = wordCount;
                     }
                 }
-                captionFile.close();
             }
         } else {
-            stats.unpairedCaptionCount++;
+            // Check if a .caption file exists if .txt doesn't
+            captionPath = fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + ".caption";
+            QFile captionFileAlternate(captionPath);
+            if (captionFileAlternate.exists() && captionFileAlternate.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                 stats.captionedMediaCount++;
+                QTextStream in(&captionFileAlternate);
+                QString content = in.readAll().trimmed();
+                captionFileAlternate.close();
+                if (!content.isEmpty()) {
+                    QStringList tags = content.split(commaSeparator, Qt::SkipEmptyParts);
+                     int wordCount = 0;
+                    for (const QString& tag : tags) {
+                        QString cleanTag = tag.trimmed();
+                        if (!cleanTag.isEmpty()) {
+                            wordCount++;
+                            stats.tagFrequencies[cleanTag.toLower()]++;
+                        }
+                    }
+                    if (wordCount > 0) {
+                        totalCaptionWords += wordCount;
+                        captionsWithWordsCount++;
+                        if (wordCount > stats.maxCaptionLengthWords) stats.maxCaptionLengthWords = wordCount;
+                        if (stats.minCaptionLengthWords == -1 || wordCount < stats.minCaptionLengthWords) stats.minCaptionLengthWords = wordCount;
+                    }
+                }
+            } else if (QFile(fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + ".txt").exists() == false && 
+                       QFile(fileInfo.absolutePath() + "/" + fileInfo.completeBaseName() + ".caption").exists() == false) {
+                // This logic is a bit off, unpaired should be if media exists but caption doesn't
+            }
         }
-        
-        
-        // Emit progress update
-        
-        // Emit progress update less frequently to reduce signal overhead
-        if ((i + 1) % 10 == 0 || (i + 1) == mediaFilePaths.count()) {
-            emit progressUpdated(i + 1, mediaFilePaths.count());
+    }
+    
+    // Calculate unpaired captions (media files without any corresponding .txt or .caption)
+    // This needs to be done carefully. The current loop structure is per media file.
+    // A separate loop or check might be better for unpaired captions.
+    // For now, let's assume the current logic for captionedMediaCount is primary.
+    // stats.unpairedCaptionCount = stats.totalFilesProcessed - stats.captionedMediaCount; // This is a simplification
+
+    if (mediaWithPixelsCount > 0) {
+        stats.averagePixels = static_cast<double>(totalPixelSum) / mediaWithPixelsCount;
+    }
+    if (captionsWithWordsCount > 0) {
+        stats.averageCaptionLengthWords = static_cast<double>(totalCaptionWords) / captionsWithWordsCount;
+    }
+    
+    // Placeholder for unpaired caption logic - needs refinement
+    // Iterate all .txt and .caption files in the directory and see which ones don't have matching media
+    // Or, more simply, for each media file, if no caption was found, increment unpaired.
+    // The current logic for captionedMediaCount already does this implicitly.
+    // So, unpaired is total - captioned.
+    int actualCaptionedCount = 0;
+    QMap<QString, bool> mediaHasCaption;
+
+    for (const QString &filePath : m_mediaFilePaths) {
+        QFileInfo fileInfo(filePath);
+        QString baseName = fileInfo.completeBaseName();
+        if (QFile(fileInfo.absolutePath() + "/" + baseName + ".txt").exists() ||
+            QFile(fileInfo.absolutePath() + "/" + baseName + ".caption").exists()) {
+            actualCaptionedCount++;
         }
     }
-
-    // Ensure final progress is emitted if not caught by modulo
-    if (mediaFilePaths.count() % 10 != 0) {
-        emit progressUpdated(mediaFilePaths.count(), mediaFilePaths.count());
-    }
+    stats.captionedMediaCount = actualCaptionedCount; // Corrected count
+    stats.unpairedCaptionCount = stats.totalFilesProcessed - stats.captionedMediaCount;
 
 
-    if (stats.imageCount > 0) {
-        stats.averagePixels = static_cast<double>(totalPixels) / stats.imageCount;
-    }
-    if (nonEmptyCaptions > 0) {
-        stats.averageCaptionLengthWords = static_cast<double>(captionWordSum) / nonEmptyCaptions;
-    }
-    if (stats.minCaptionLengthWords == -1 && nonEmptyCaptions > 0) { // If all captions were empty but existed
-        stats.minCaptionLengthWords = 0;
-    }
-
-
+    emit progressUpdated(stats.totalFilesProcessed, stats.totalFilesProcessed); // Final update
     return stats;
-}
-
-void StatisticsDialog::updateStatisticsDisplay(const DatasetStatistics &stats)
-{
-    statisticsDisplay->setText(stats.toString());
-    progressBar->setValue(progressBar->maximum()); // Mark as complete
-}
-
-void StatisticsDialog::updateProgress(int processedCount, int totalCount)
-{
-    if (progressBar->maximum() != totalCount) {
-        progressBar->setMaximum(totalCount);
-    }
-    progressBar->setValue(processedCount);
 }
